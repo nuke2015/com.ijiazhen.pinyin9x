@@ -1,0 +1,37 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.ijiazhen.pinyin9x'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.ijiazhen.pinyin9x"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    tasks.withType(JavaCompile) {
+        options.encoding = 'UTF-8'
+    }
+}
+
+dependencies {
+    // Vosk 离线语音识别引擎（无需 Google 服务，支持中文）
+    implementation 'com.alphacephei:vosk-android:0.3.47'
+}
