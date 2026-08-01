@@ -1,0 +1,65 @@
+============================================================
+三步上栏 - 逐音节选字组词算法与过程
+============================================================
+整理时间: 2026-07-18
+
+一、概述
+三步上栏：当用户输入多音节拼音（如 wujingfu），词库无直接匹配时，
+系统自动拆分音节，逐音节返回候选字，用户逐音节选字后组装成词，
+提交后自动入库成为用户热词。下次输入同一拼音即可直接命中。
+
+二、涉及 API
+1. POST /api/free_input          - 拆分音节 + 返回每音节候选字
+2. POST /api/free_input/commit   - 提交用户选出的组合词，入库热词+词典
+
+三、详细流程（以 wujingfu -> 五经富 为例）
+
+【Step 0】用户输入拼音 "wujingfu"
+
+【Step 1】POST /api/free_input {"pinyin": "wujingfu"}
+  -> 1.1 计算整体 T9 码: wu->98, jing->5464, fu->38 -> "98546438"
+  -> 1.2 拆分音节: ["wu", "jing", "fu"]
+  -> 1.3 拼接拼音: "wu jing fu"
+  -> 1.4 词库精确查词 (dict_search, pinyin="wu jing fu")
+       -> 未命中 (found=false) -> 走逐音节选字
+  -> 1.5 逐音节 merged_search:
+       音节1 [wu]   T9=98   -> 候选字: 无/五/物/务/误...
+       音节2 [jing]  T9=5464 -> 候选字: 经/竟/京/景/精...
+       音节3 [fu]    T9=38   -> 候选字: 副/辐/富/夫/复...
+  -> 返回 {found:false, syllables:[...], steps:[{syllable, t9_code, candidates}]}
+
+【Step 2】用户在页面上逐音节选字
+  音节1: 选 "五"
+  音节2: 选 "经"
+  音节3: 选 "富"
+
+【Step 3】POST /api/free_input/commit
+  {"raw":"wujingfu", "word":"五经富", "syllables":["wu","jing","fu"]}
+  -> 3.1 计算组合 T9 码: "98546438"
+  -> 3.2 user_pick("五经富", "98546438", amount=200000)
+       写入 user_hot_word 表 (UPSERT, 首次 freq=200000)
+  -> 3.3 查 dict 是否已有 -> 无 -> add_word("98546438", "五经富", freq=200000)
+  -> 3.4 若词含标点 -> batch_learn_from_sentence (按标点分割)
+  -> 3.5 若纯中文 >=5字 -> 同时入库 sentence_template
+  -> 返回 {ok:true, word:"五经富", t9_code:"98546438", user_freq:200000}
+
+【验证】再次 POST /api/free_input {"pinyin": "wujingfu"}
+  -> found=true, word="五经富"  (直接命中)
+
+四、关键函数 (t9_dict.py)
+user_pick(word,t9,amt)       - 热词选中/累加 (UPSERT)
+user_search(code,prefix,...) - 热词 T9 精确/前缀搜索
+user_search_by_initials      - 热词简拼搜索 (wjf->五经富)
+merged_search(mode,...)      - 合并查询: 热词优先 + dict 去重
+add_word(t9,word,freq)       - 写入 dict 词典
+add_sentence(...)            - 写入 sentence_template
+batch_learn_from_sentence    - 标点分割: 短->热词, 长->热句
+
+五、API (web_server.py)
+/api/free_input        - 拆分音节+候选字
+/api/free_input/commit - 提交组合词入库
+
+六、涉及表
+- dict: 基础词典
+- user_hot_word: 用户热词
+- sentence_template: 整句模板

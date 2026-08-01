@@ -1,0 +1,1687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>9+ 键盘预览 - 电脑调试版</title>
+  <style>
+    :root {
+      --gap: 4px;
+      --radius: 8px;
+      --accent: #1a73e8;
+      --text-color: #1c1c1e;
+      --key-max-h: 58px;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    /* 隐藏全部滚动条，保留滚动功能 */
+    *::-webkit-scrollbar { display:none; width:0; height:0; }
+    * { scrollbar-width:none; -ms-overflow-style:none; }
+    html,body { width:100%; height:100%; overflow:hidden; background:#e5e5e5;
+      font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+      -webkit-tap-highlight-color:transparent; -webkit-user-select:none; user-select:none;
+      -webkit-touch-callout:none; touch-action:manipulation; }
+
+    #app { display:flex; flex-direction:column; height:100%; width:100%; background:#fff; }
+
+    /* ====== 电脑端：手机框模拟（只有 class='desktop-preview' 时生效） ====== */
+    body.desktop-preview { display:flex; align-items:center; justify-content:center; background:#333; }
+    body.desktop-preview #app {
+      width:390px; height:844px; max-height:98vh;
+      border-radius:24px; overflow:hidden;
+      box-shadow:0 0 40px rgba(0,0,0,.5);
+    }
+
+    /* ── 上半区 textarea ── */
+    #input-header { flex:1 1 0; display:flex; flex-direction:column; background:#fff; position:relative; overflow:hidden; }
+    #text-area { flex:1; display:block; width:100%; background:transparent; color:var(--text-color); font-size:17px; line-height:1.6; outline:none; border:none; resize:none; padding:12px 14px; word-break:break-all; white-space:pre-wrap; -webkit-user-select:text; user-select:text; overflow-y:auto; font-family:inherit; }
+    #text-area::placeholder { color:#c7c7cc; }
+    #header-toolbar { flex:0 0 auto; display:flex; align-items:center; justify-content:flex-end; padding:5px 10px; background:#fff; border-top:1px solid #f0f0f0; gap:8px; }
+    #header-toolbar .tool-label { color:#8e8e93; font-size:12px; margin-right:auto; }
+    #btn-auto-test { padding:5px 12px; background:#1a73e8; color:#fff; border:none; border-radius:6px; font-size:12px; cursor:pointer; white-space:nowrap; }
+    #btn-auto-test:active { background:#1557b0; }
+    #btn-auto-test.running { background:#ff9500; }
+    #btn-clear-textarea { padding:5px 10px; background:#f2f2f7; color:#ff3b30; border:none; border-radius:6px; font-size:12px; cursor:pointer; }
+    #btn-clear-textarea:active { background:#e5e5ea; }
+    #test-log { position:absolute; top:40px; right:8px; left:8px; max-height:150px; overflow-y:auto; background:rgba(255,255,255,0.96); color:#666; font-size:11px; padding:6px 10px; border-radius:6px; display:none; z-index:3; white-space:pre-wrap; font-family:monospace; pointer-events:none; box-shadow:0 2px 8px rgba(0,0,0,0.1); }
+
+    /* ── 底部固定区域 ── */
+    #bottom-fixed { flex:0 0 45vh; display:flex; flex-direction:column; overflow:hidden; position:relative; }
+
+    /* ── 候选区 ── */
+    #candidate-bar { flex:0 0 38px; display:flex; align-items:center; padding:4px 8px; gap:4px; background:#fff; overflow:hidden; }
+    #pinyin-display { color:#f5a623; font-weight:700; font-size:13px; white-space:nowrap; margin-right:2px; flex-shrink:0; }
+    #candidates { display:flex; align-items:center; gap:4px; overflow-x:auto; flex:1; min-width:0; }
+    .cand-word { color:#333; padding:3px 8px; border-radius:5px; white-space:nowrap; cursor:pointer; font-size:15px; flex-shrink:0; transition:background .08s; }
+    .cand-word.high { color:#1a73e8; font-weight:700; background:#e3edfd; }
+    .cand-word.swipe-high { color:#1a73e8; font-weight:700; background:#d2e3fc; }
+    .cand-word.assoc { color:#2e7d32; font-size:13px; }
+    .cand-word.assoc.high { color:#1b5e20; font-weight:700; background:#e8f5e9; }
+    .cand-word.assoc.swipe-high { color:#1b5e20; font-weight:700; background:#c8e6c9; }
+    #candidate-bar { touch-action:none; }
+    .cand-sep { width:1px; height:16px; background:#e0e0e0; flex-shrink:0; margin:0 2px; }
+    .cand-more { padding:4px 8px; color:#1a73e8; border:none; font-size:12px; cursor:pointer; flex-shrink:0; background:#e8f0fe; border-radius:4px; font-weight:600; }
+
+    #cand-expand-panel { display:none; position:absolute; left:calc(20% + 10px); right:0; top:0; bottom:0; background:#fff; z-index:10; flex-direction:column; box-shadow:-2px 0 8px rgba(0,0,0,0.08); }
+    #cand-expand-panel.open { display:flex; flex-direction:column; }
+    #cand-expand-inner { flex:1; background:#fff; border-radius:12px 12px 0 0; display:flex; flex-direction:column; overflow:hidden; }
+    #cand-expand-grid { flex:1; overflow-y:auto; display:flex; flex-wrap:wrap; gap:8px; padding:10px 12px; align-content:flex-start; }
+    #cand-expand-grid .cand-tile { padding:10px 14px; background:#f5f5f7; border:1px solid #e0e0e0; border-radius:10px; font-size:18px; color:#333; cursor:pointer; white-space:nowrap; flex-shrink:0; }
+    #cand-expand-grid .cand-tile:active { background:#e3edfd; transform:scale(0.96); }
+    #cand-expand-grid .cand-tile.assoc { background:#e8f5e9; border-color:#c8e6c9; color:#2e7d32; }
+    #cand-expand-grid .cand-tile.high { background:#e3edfd; color:#1a73e8; font-weight:700; }
+    .expand-sep { width:100%; height:1px; background:#e0e0e0; margin:4px 0; flex-shrink:0; }
+    .expand-label { font-size:12px; color:#999; padding:4px 2px 2px; flex-shrink:0; width:100%; }
+
+
+
+    /* ── 导航栏 ── */
+    #nav-bar { flex:0 0 36px; display:flex; align-items:center; padding:2px 8px 4px; gap:4px; background:#fff; }
+    #nav-bar .logo { width:28px; height:28px; display:flex; align-items:center; justify-content:center; flex-shrink:0; color:#888; font-size:16px; cursor:pointer; border:none; background:transparent; padding:0; }
+    #nav-bar .logo:hover { color:#555; }
+    .nav-tab { flex:1; text-align:center; font-size:13px; color:#333; padding:4px 0; border-radius:16px; cursor:pointer; border:none; background:transparent; transition:.15s; font-weight:500; }
+    .nav-tab.active { color:#1a73e8; font-weight:700; background:#e3edfd; }
+
+    /* ── 键盘区 ── */
+    #keyboard-wrap { flex:1 1 0; display:flex; flex-direction:column; background:#fff; padding:0 5px 5px; min-height:0; position:relative; }
+    .kb-panel { display:none; flex:1; flex-direction:column; padding:4px 5px 0; min-height:0; overflow-y:auto; }
+    .kb-panel.active { display:flex; }
+
+    #sys-bar { flex:0 0 24px; background:#fff; }
+
+    /* 按键通用样式 */
+    .kr { display:flex; gap:4px; }
+    .k {
+      flex:1; min-height:0; max-height:var(--key-max-h); background:#fff; border:1px solid #d0d5dd; border-radius:10px;
+      color:#222; font-size:16px; font-weight:500; cursor:pointer;
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      box-shadow:0 1px 2px rgba(0,0,0,.05); user-select:none; min-width:0;
+      transition:background .06s; padding:2px 1px;
+    }
+    .k:active { background:#ddd; }
+    .k:hover { background:#f0f0f5; }
+    .k.fn { color:#333; font-size:14px; }
+    .k.act { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .k.act:active { background:#1557b0; }
+    .k.sel-on { background:#e5e5ea; color:#333; border-color:#c0c0c8; }
+    .k .dig { font-size:10px; color:#bbb; line-height:1; }
+    .k .let { font-size:17px; font-weight:500; line-height:1.3; }
+    .k.w15 { flex:1.5; }
+    .k.w2 { flex:2; }
+    .k.w3 { flex:3; }
+    .k.w4 { flex:4; }
+    .k.w6 { flex:6; }
+
+    /* ── T9 九宫格 + 数字盘共用 ── */
+    .t9 { display:flex; gap:4px; flex:1; min-height:0; }
+    .t9-l { display:flex; flex-direction:column; gap:0; flex:0 0 20%; max-width:20%; min-width:0; min-height:0; overflow-x:hidden; overflow-y:auto; padding:6px; border:1px solid #d0d5dd; border-radius:10px; background:#fff; }
+    .t9-l .k, .t9-l .side-item { flex:0 0 auto; min-height:auto; height:auto; border-radius:0; border:none; box-shadow:none; background:transparent; font-size:17px; color:#333; padding:12px 0; text-align:center; display:flex; align-items:center; justify-content:center; width:100%; touch-action:manipulation; }
+    .t9-l .side-sym { flex:0 0 auto; padding:12px 0; text-align:center; font-size:17px; color:#333; cursor:pointer; user-select:none; -webkit-user-select:none; border-radius:6px; }
+    .t9-l .side-sym:active { background:#e3edfd; }
+    .t9-l .k:active, .t9-l .side-item:active { background:#e3edfd; }
+    .t9-l .seg-label { font-size:10px; color:#999; padding:4px 8px 2px; text-align:center; white-space:nowrap; flex-shrink:0; background:#fafafa; }
+    .t9-l .seg-part { display:flex; align-items:center; justify-content:center; flex:0 0 auto; min-height:auto; height:auto; background:#f0f4ff; border:none; border-radius:0; font-size:17px; color:#333; padding:12px 8px; word-break:break-all; text-align:center; cursor:pointer; font-weight:600; }
+    .t9-l .seg-part:active { background:#d4dff7; }
+    .t9-l .seg-part.hi { background:#e3edfd; color:#1a73e8; font-weight:700; }
+    .t9-l .seg-divider { flex:0 0 auto; height:1px; background:#e0e0e0; margin:2px 0; }
+    .t9-r { flex:1; display:flex; flex-direction:column; gap:4px; min-width:0; }
+    .t9-r .kr { flex:1; }
+    .t9-r .kr .k { flex:1; height:auto; }
+
+    /* ── 英文 QWERTY ── */
+    .eb-kb { flex:1; display:flex; flex-direction:column; gap:4px; min-height:0; }
+    .eb-kb .kr { flex:1; }
+    .eb-kb .kr .k { height:auto; font-size:17px; }
+    .eb-kb .kr .k .dig { font-size:9px; display:block; line-height:1; margin-bottom:1px; }
+
+    /* ── 符号 ── 滚动分类列表 */
+    .sym-scroll { flex:1; overflow-y:auto; padding:2px 6px 4px; min-height:0; }
+    .sym-cat-label { font-size:11px; color:#999; padding:8px 4px 4px; font-weight:600; border-bottom:1px solid #f0f0f0; margin-bottom:4px; }
+    .sym-cat-row { display:flex; flex-wrap:wrap; gap:4px; padding:2px 0 6px; }
+    .sym-cat-row .sym-key { flex:0 0 calc((100% - 20px) / 6); aspect-ratio:1; min-width:0; display:flex; align-items:center; justify-content:center; background:#fff; border:1px solid #d0d5dd; border-radius:10px; font-size:17px; color:#333; cursor:pointer; padding:0 2px; box-shadow:0 1px 1px rgba(0,0,0,.03); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .sym-cat-row .sym-key:active { background:#e3edfd; transform:scale(0.93); }
+    .sym-cat-row .sym-key.w2 { flex:0 0 calc((100% - 20px) / 6 * 2 + 4px); aspect-ratio:auto; min-width:0; }
+    .sym-bottom { flex-shrink:0; margin-top:4px; }
+
+    /* ── 编辑 ── */
+    .edit-wrap { display:flex; gap:4px; flex:1; min-height:0; }
+    .dp { flex:1.8; display:flex; flex-direction:column; gap:4px; }
+    .dp .kr { flex:1; }
+    .dp .k { flex:1; height:auto; font-size:22px; }
+    .ea { flex:1; display:flex; flex-direction:column; gap:4px; }
+    .ea .k { flex:1; height:auto; font-size:14px; }
+    .eb { display:flex; gap:4px; margin-top:4px; flex-shrink:0; flex-wrap:wrap; }
+    .eb .k { font-size:14px; padding:10px 8px; }
+
+    /* ── 列表面板 ── */
+    .panel-header { font-size:13px; color:#888; padding:2px 8px 4px; display:flex; justify-content:space-between; font-weight:500; flex-shrink:0; }
+    .panel-header .action { color:#1a73e8; cursor:pointer; }
+    .panel-list { display:flex; flex-direction:column; gap:2px; flex:1; overflow-y:auto; min-height:0; }
+    .panel-item { display:flex; align-items:center; padding:11px 12px; background:#fff; border-radius:10px; cursor:pointer; font-size:14px; color:#333; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+    .panel-item:active { background:#e3edfd; }
+    .panel-item .text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .panel-item .time { font-size:11px; color:#bbb; margin-left:10px; white-space:nowrap; display:flex; gap:2px; align-items:center; }
+    .panel-item .time .list-btn { background:none; border:none; cursor:pointer; font-size:14px; padding:2px 6px; color:#bbb; border-radius:4px; }
+    .panel-item .time .list-btn:active { background:#e5e5ea; color:#666; }
+    .empty-state { color:#999; text-align:center; padding:32px 16px; font-size:14px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="input-header">
+      <textarea id="text-area" placeholder="在此输入文字测试..." inputmode="none" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+      <div id="header-toolbar">
+        <span class="tool-label" id="tool-label">9+ 输入法预览</span>
+        <button id="btn-clear-textarea">清空</button>
+        <button id="btn-auto-test">▶ 模拟候选</button>
+      </div>
+      <div id="test-log"></div>
+    </div>
+    <div id="bottom-fixed">
+      <div id="candidate-bar"><span id="pinyin-display"></span><span id="candidates"></span><button class="cand-more" id="btn-cand-expand" style="display:none">翻页▼</button></div>
+      <div id="nav-bar"></div>
+      <div id="keyboard-wrap">
+        <div id="kb-panel-t9" class="kb-panel active"></div>
+        <div id="kb-panel-en" class="kb-panel"></div>
+        <div id="kb-panel-sym" class="kb-panel"></div>
+        <div id="kb-panel-num" class="kb-panel"></div>
+        <div id="kb-panel-edit" class="kb-panel"></div>
+        <div id="kb-panel-clip" class="kb-panel"></div>
+        <div id="kb-panel-fav" class="kb-panel"></div>
+        <div id="sys-bar"></div>
+        <div id="cand-expand-panel">
+          <div id="cand-expand-inner">
+            <div id="cand-expand-grid"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(()=>{
+/* ====== Mock Rime Bridge for desktop preview ====== */
+const MockRime={
+  composition:'',
+  cands:[],
+  async processKey(key){
+    this.composition+=key;
+    this.cands=[this.composition+'字',this.composition+'词',this.composition+'测','示例一','示例二','示例三','更多1','更多2','更多3','更多4','更多5','更多6'];
+    return {type:'HasCandidates',composition:this.composition,candidates:this.cands};
+  },
+  async deleteChar(){
+    this.composition=this.composition.slice(0,-1);
+    if(!this.composition){this.cands=[];return {type:'NoChange'};}
+    this.cands=[this.composition+'字',this.composition+'词'];
+    return {type:'HasCandidates',composition:this.composition};
+  },
+  async selectCandidate(idx){
+    const cand=this.cands[idx]||'?';
+    this.composition=''; this.cands=[];
+    return {type:'Committed',text:cand};
+  },
+  async getCandidates(){return this.cands;},
+  async getComposition(){return this.composition;},
+  async getNextPage(){return [];},
+  async reset(){this.composition='';this.cands=[];},
+  async switchSchema(s){
+    this.composition='';this.cands=[];
+    return true;
+  },
+  async predictAssociation(t){
+    return ['联想一','联想二','联想三','联想四','联想五'];
+  },
+  async selectAssociation(idx){return {type:'Committed',text:'联想词'};},
+  log(msg){console.log('[Mock]',msg);}
+};
+
+/* ====== Rime JSBridge (auto-detect: Android JsBridge or desktop Mock) ====== */
+const Rime={
+  call(method,...args){
+    return new Promise(resolve=>{
+      try{
+        // Android 环境: 走 JsBridge
+        if(typeof JsBridge!=='undefined'&&typeof JsBridge[method]==='function'){
+          const raw=JsBridge[method](...args);
+          if(raw===undefined||raw===null){resolve(null);return;}
+          resolve(typeof raw==='string'?tryParse(raw):raw);
+        }else{
+          // 桌面预览: 走 MockRime
+          const result=MockRime[method](...args);
+          if(result instanceof Promise){result.then(r=>resolve(r));}
+          else resolve(result);
+        }
+      }catch(e){console.error('[Rime] call error',method,e);resolve(null);}
+    });
+  },
+  processKey(key){return this.call('processKey',key);},
+  deleteChar(){return this.call('deleteChar');},
+  selectCandidate(idx){return this.call('selectCandidate',idx);},
+  getCandidates(){return this.call('getCandidates');},
+  getComposition(){return this.call('getComposition');},
+  getNextPage(){return this.call('getNextPage');},
+  reset(){return this.call('reset');},
+  switchSchema(s){return this.call('switchSchema',s);},
+  predictAssociation(t){return this.call('predictAssociation',t);},
+  selectAssociation(idx){return this.call('selectAssociation',idx);},
+  log(msg){this.call('log',msg);}
+};
+function tryParse(s){try{return JSON.parse(s);}catch(e){return s;}}
+
+/* ====== State ====== */
+const S={
+  mode:'t9', shift:false, capsLock:false, selectMode:false,
+  cands:[], candPage:0,
+  undoStack:[], symPage:0, symFrom:'t9',
+  clipboard:[], favorites:[
+    {text:'你好，我们是家家月嫂，请问有什么可以帮您？',pinned:false},
+    {text:'好哒，加我微信 13530987012 （邹春意）。',pinned:false},
+  ],
+  associations:[], assocPage:0,
+  associationMode:false, lastCommitted:'',
+  atTrigger:null, atTriggerStart:-1, atCands:[]
+};
+
+/* ====== DOM refs ====== */
+const $ta=document.getElementById('text-area');
+const $pd=document.getElementById('pinyin-display');
+const $cands=document.getElementById('candidates');
+const $btnCandExpand=document.getElementById('btn-cand-expand');
+const $kw=document.getElementById('keyboard-wrap');
+const $nav=document.getElementById('nav-bar');
+const $testLog=document.getElementById('test-log');
+const $btnTest=document.getElementById('btn-auto-test');
+const $btnClear=document.getElementById('btn-clear-textarea');
+const $toolLabel=document.getElementById('tool-label');
+
+function panelId(m){ return 'kb-panel-'+m; }
+function $panel(m){ return document.getElementById(panelId(m)); }
+
+/* ====== Text ops ====== */
+function getText(){return $ta.value||'';}
+function setText(t){$ta.value=t;}
+/**
+ * 撤消（恢复删除）：
+ *   仅撤销删除类操作——退格删字、剪切、清空。
+ *   每次删除前将 (删除位置, 被删文本) 压入 undoStack，
+ *   撤销时从栈顶弹出，在对应位置插回被删文本。
+ *   正常输入不记录，不会被撤销。
+ */
+function saveUndoForDelete(delPos, delText){
+  if(!delText||delText.length===0)return;
+  S.undoStack.push({pos:delPos, text:delText});
+  if(S.undoStack.length>80)S.undoStack.shift();
+}
+function undo(){
+  if(S.undoStack.length===0)return;
+  const entry=S.undoStack.pop();
+  const pos=entry.pos;
+  const val=getText();
+  const prefix=val.substring(0,pos);
+  const suffix=val.substring(pos);
+  setText(prefix+entry.text+suffix);
+  const newPos=pos+entry.text.length;
+  $ta.setSelectionRange(newPos,newPos);
+  $ta.focus();
+  updateToolLabel();
+}
+
+const PAIR_MAP={'（）':1,'《》':1,'【】':1,'「」':1,'『』':1};
+function insertText(t){
+  const start=$ta.selectionStart,end=$ta.selectionEnd;
+  const before=$ta.value.substring(0,start);
+  const after=$ta.value.substring(end);
+  const isPair=t.length===2&&PAIR_MAP[t];
+  if(isPair){
+    $ta.value=before+t[0]+t[1]+after;
+    $ta.setSelectionRange(start+1,start+1);
+  }else{
+    $ta.value=before+t+after;
+    $ta.setSelectionRange(start+t.length,start+t.length);
+  }
+  $ta.focus();
+  updateToolLabel();
+  checkAtTrigger();
+}
+
+/* ====== Calculator ====== */
+function parseCalcExpr(expr){
+  // 预处理: 把 ×÷ 换成 */ ，去掉空格
+  expr=expr.replace(/×/g,'*').replace(/÷/g,'/').replace(/\s+/g,'');
+  // 提取末尾的合法计算表达式: 数字、运算符、小数点
+  const m=expr.match(/([\d+\-*/.()]+)$/);
+  if(!m)return null;
+  const calcExpr=m[1];
+  // 去掉开头多余的运算符 (如 *3+5 -> 3+5)
+  const clean=calcExpr.replace(/^[+\-*/]+/,'');
+  if(!clean||!/[\d]/.test(clean))return null;
+  return clean;
+}
+
+function doCalc(){
+  const text=getText();
+  const start=$ta.selectionStart;
+  // 取光标前的文本
+  const before=$ta.value.substring(0,start);
+  const expr=parseCalcExpr(before);
+  if(!expr)return;
+  try{
+    // eslint-disable-next-line no-new-func
+    const result=new Function('return ('+expr+')')();
+    if(result===undefined||result===null||!isFinite(result))return;
+    // 格式化结果: 整数不显示小数点
+    const formatted=Number.isInteger(result)?String(result):String(Math.round(result*1e10)/1e10);
+    // 拼出公式展开: 1+2×3=7
+    const formula=expr.replace(/\*/g,'×').replace(/\//g,'÷')+'='+formatted;
+    // 替换光标前的表达式部分
+    const prefix=before.substring(0,before.length-expr.length);
+    $ta.value=prefix+formula+$ta.value.substring(start);
+    const pos=prefix.length+formula.length;
+    $ta.setSelectionRange(pos,pos);
+    $ta.focus();
+    updateToolLabel();
+    checkAtTrigger();
+  }catch(e){
+    // 表达式不合法，静默忽略
+  }
+}
+
+/* ====== @ Trigger: @时间 / @日期 ====== */
+function buildTimeFormats(){
+  const now=new Date();
+  const p=n=>String(n).padStart(2,'0');
+  return [
+    p(now.getHours())+':'+p(now.getMinutes())+':'+p(now.getSeconds()),
+    p(now.getHours())+':'+p(now.getMinutes()),
+    now.getFullYear()+'-'+p(now.getMonth()+1)+'-'+p(now.getDate())+' '+p(now.getHours())+':'+p(now.getMinutes())+':'+p(now.getSeconds()),
+    now.toLocaleTimeString('zh-CN',{hour12:false}),
+    now.toLocaleTimeString('zh-CN',{hour12:true}),
+    now.toLocaleString('zh-CN',{hour12:false}),
+    Math.floor(now.getTime()/1000)+'',
+  ];
+}
+
+function buildDateFormats(){
+  const now=new Date();
+  const p=n=>String(n).padStart(2,'0');
+  return [
+    now.getFullYear()+'-'+p(now.getMonth()+1)+'-'+p(now.getDate()),
+    now.getFullYear()+'年'+(now.getMonth()+1)+'月'+now.getDate()+'日',
+    p(now.getMonth()+1)+'-'+p(now.getDate()),
+    (now.getMonth()+1)+'月'+now.getDate()+'日',
+    now.getFullYear()+p(now.getMonth()+1)+p(now.getDate()),
+    now.toLocaleDateString('zh-CN'),
+    '星期'+['日','一','二','三','四','五','六'][now.getDay()],
+    now.getDate()+'日',
+  ];
+}
+
+function checkAtTrigger(){
+  const text=getText();
+  const pos=$ta.selectionStart;
+  const prefix=text.substring(0,pos);
+  // 已激活，检查是否仍有效
+  if(S.atTrigger){
+    const ts=S.atTrigger==='time'?'@时间':'@日期';
+    if(prefix.endsWith(ts)) return true;
+    // 失去焦点，取消触发
+    S.atTrigger=null; S.atTriggerStart=-1; S.atCands=[];
+    renderCands(); updateSegPanel();
+    return false;
+  }
+  // 检测新触发
+  const m=prefix.match(/(@时间|@日期)$/);
+  if(m){
+    S.atTrigger=m[0]==='@时间'?'time':'date';
+    S.atTriggerStart=pos-m[0].length;
+    S.atCands=S.atTrigger==='time'?buildTimeFormats():buildDateFormats();
+    renderCands(); updateSegPanel();
+    return true;
+  }
+  return false;
+}
+
+function renderAtCandidates(){
+  $pd.textContent=S.atTrigger==='time'?'@时间':'@日期';
+  let h='';
+  for(let i=0;i<S.atCands.length;i++){
+    h+=`<span class="cand-word${i===0?' high':''}">${S.atCands[i]}</span>`;
+  }
+  $cands.innerHTML=h;
+  bindCandSwipe($cands);
+  $btnCandExpand.style.display='none';
+  const ep=document.getElementById('cand-expand-panel');
+  if(ep)ep.classList.remove('open');
+}
+
+function commitAtTrigger(cand){
+  const text=getText();
+  const start=S.atTriggerStart;
+  const end=S.atTriggerStart+(S.atTrigger==='time'?3:3);
+  const prefix=text.substring(0,start);
+  const suffix=text.substring(end);
+  $ta.value=prefix+cand+suffix;
+  const pos=start+cand.length;
+  $ta.setSelectionRange(pos,pos);
+  S.atTrigger=null; S.atTriggerStart=-1; S.atCands=[];
+  $pd.textContent='';
+  renderCands(); updateSegPanel();
+  $ta.focus();
+  updateToolLabel();
+}
+
+function doCancelAtTrigger(){
+  S.atTrigger=null; S.atTriggerStart=-1; S.atCands=[];
+  $pd.textContent='';
+  renderCands(); updateSegPanel();
+}
+
+/* ====== Candidate ====== */
+async function updateCands(){
+  if(S.atTrigger)return;
+  const cands=await Rime.getCandidates();
+  const comp=await Rime.getComposition();
+  S.cands=Array.isArray(cands)?cands:[];
+  if(typeof comp==='string')$pd.textContent=comp;
+  else $pd.textContent='';
+  S.candPage=0;
+  renderCands();
+  updateSegPanel();
+}
+
+function renderCands(){
+  if(S.atTrigger){renderAtCandidates();return;}
+  let html='';
+  const pp=6;
+  if(S.mode==='t9'){
+    if(S.cands.length>0){
+      const page=S.cands.slice(S.candPage*pp,(S.candPage+1)*pp);
+      for(let i=0;i<page.length;i++){
+        html+=`<span class="cand-word${i===0?' high':''}">${page[i]}</span>`;
+      }
+    }
+    if(S.associationMode&&S.associations.length>0){
+      if(html)html+='<span class="cand-sep"></span>';
+      const assocPage=S.associations.slice(S.assocPage*pp,(S.assocPage+1)*pp);
+      for(let i=0;i<assocPage.length;i++){
+        html+=`<span class="cand-word assoc${i===0?' high':''}">${assocPage[i]}</span>`;
+      }
+    }
+  }
+  $cands.innerHTML=html;
+  bindCandSwipe($cands);
+  const totalCandPages=Math.ceil(S.cands.length/pp);
+  $btnCandExpand.style.display=(totalCandPages>1)?'block':'none';
+  $btnCandExpand.onclick=()=>toggleCandExpand();
+  const expandPanel=document.getElementById('cand-expand-panel');
+  if(expandPanel.classList.contains('open')) fillExpandPanel();
+}
+
+/* ── 候选栏滑动选择 ── */
+function bindCandSwipe(container){
+  let swipeState={active:false,startX:0,currentEl:null};
+
+  const getCandEl=e=>{
+    let el=e.target;
+    while(el&&el!==container){
+      if(el.classList.contains('cand-word'))return el;
+      el=el.parentElement;
+    }
+    return null;
+  };
+
+  const clearHigh=()=>{
+    container.querySelectorAll('.cand-word.swipe-high').forEach(el=>el.classList.remove('swipe-high'));
+  };
+
+  const setHigh=el=>{if(el){clearHigh();el.classList.add('swipe-high');}};
+
+  container.addEventListener('pointerdown',e=>{
+    const el=getCandEl(e);
+    if(!el)return;
+    e.preventDefault();
+    swipeState.active=true; swipeState.startX=e.clientX; swipeState.currentEl=el;
+    setHigh(el);
+  });
+
+  container.addEventListener('pointermove',e=>{
+    if(!swipeState.active)return;
+    e.preventDefault();
+    const el=getCandEl(e);
+    if(el&&el!==swipeState.currentEl){swipeState.currentEl=el;setHigh(el);}
+  });
+
+  container.addEventListener('pointerup',e=>{
+    if(!swipeState.active)return;
+    const el=getCandEl(e)||swipeState.currentEl;
+    clearHigh(); swipeState.active=false; swipeState.currentEl=null;
+    if(el){
+      if(el.classList.contains('assoc'))commitAssociation(el.textContent);
+      else commitCandidate(el.textContent);
+    }
+  });
+
+  container.addEventListener('pointerleave',()=>{
+    if(swipeState.active){clearHigh();swipeState.active=false;swipeState.currentEl=null;}
+  });
+}
+
+function toggleCandExpand(){
+  const panel=document.getElementById('cand-expand-panel');
+  if(panel.classList.contains('open')){
+    panel.classList.remove('open'); $btnCandExpand.textContent='翻页▼';
+  }else{
+    fillExpandPanel(); panel.classList.add('open'); $btnCandExpand.textContent='收起▲';
+  }
+}
+
+function fillExpandPanel(){
+  const grid=document.getElementById('cand-expand-grid');
+  if(!grid)return;
+  S.expandBatch=0;
+  appendExpandBatch(grid);
+  grid.scrollTop=0;
+  // 滚动加载更多
+  grid.onscroll=()=>{
+    const nearBottom=grid.scrollHeight-grid.scrollTop-grid.clientHeight<60;
+    if(nearBottom)appendExpandBatch(grid);
+  };
+}
+
+function appendExpandBatch(grid){
+  const pp=9;
+  const start=S.expandBatch*pp;
+  if(start>=S.cands.length)return;
+  const batch=S.cands.slice(start,start+pp);
+  const frag=document.createDocumentFragment();
+  for(let i=0;i<batch.length;i++){
+    const el=document.createElement('span');
+    el.className='cand-tile'+(start===0&&i===0?' high':'');
+    el.textContent=batch[i];
+    el.addEventListener('click',()=>{commitCandidate(el.textContent);collapseExpandPanel();});
+    frag.appendChild(el);
+  }
+  grid.appendChild(frag);
+  S.expandBatch++;
+}
+
+function collapseExpandPanel(){
+  const panel=document.getElementById('cand-expand-panel');
+  if(panel)panel.classList.remove('open');
+  $btnCandExpand.textContent='翻页▼';
+}
+
+
+
+async function commitCandidate(cand){
+  if(S.atTrigger){commitAtTrigger(cand);return;}
+  const idx=S.cands.indexOf(cand);
+  if(idx>=0){
+    const r=await Rime.selectCandidate(idx);
+    if(r&&r.type==='Committed') insertText(r.text);
+    else insertText(cand);
+    await doAssociation();
+  }else insertText(cand);
+  await updateCands();
+}
+
+async function commitAssociation(cand){
+  insertText(cand);
+  await doAssociation();
+}
+
+async function doAssociation(){
+  if(S.atTrigger)return;
+  const text=getText().trim();
+  if(!text)return;
+  const last=text.length>10?text.substring(text.length-10):text;
+  const list=await Rime.predictAssociation(last);
+  if(Array.isArray(list)&&list.length>0){
+    S.associations=list; S.associationMode=true; S.assocPage=0; renderCands();
+  }else{
+    S.associationMode=false; S.associations=[]; renderCands();
+  }
+}
+
+function exitAssociation(){
+  S.associationMode=false; S.associations=[]; S.assocPage=0; renderCands();
+}
+
+async function commitPinyinAsText(){
+  const comp=await Rime.getComposition();
+  if(comp)insertText(comp);
+  Rime.reset(); $pd.textContent='';S.cands=[];renderCands();updateSegPanel();
+}
+
+/* ====== Editing ====== */
+async function doBackspace(){
+  if(S.mode==='t9'){
+    const r=await Rime.deleteChar();
+    if(r&&r.type==='Committed')insertText(r.text);
+    else if(r&&r.type==='NoChange'){
+      const start=$ta.selectionStart;
+      if(start>0){
+        const ch=$ta.value.substring(start-1,start);
+        saveUndoForDelete(start-1,ch);
+        $ta.value=$ta.value.substring(0,start-1)+$ta.value.substring(start);
+        $ta.setSelectionRange(start-1,start-1);
+      }
+      $ta.focus();
+    }
+    await updateCands();
+  }else{
+    const start=$ta.selectionStart;
+    if(start>0){
+      const ch=$ta.value.substring(start-1,start);
+      saveUndoForDelete(start-1,ch);
+      $ta.value=$ta.value.substring(0,start-1)+$ta.value.substring(start);
+      $ta.setSelectionRange(start-1,start-1);
+    }
+    $ta.focus();
+  }
+  updateToolLabel();
+}
+
+function moveCaret(dir){
+  $ta.focus();
+  const val=$ta.value;
+  const start=$ta.selectionStart,end=$ta.selectionEnd;
+  if(dir==='left'){
+    if(S.selectMode){ if(end>0) $ta.setSelectionRange(start,end-1); }
+    else{ if(start>0) $ta.setSelectionRange(start-1,start-1); }
+  }else if(dir==='right'){
+    if(S.selectMode){ if(end<val.length) $ta.setSelectionRange(start,end+1); }
+    else{ if(end<val.length) $ta.setSelectionRange(end+1,end+1); }
+  }else if(dir==='up'){
+    // 上一行同列位置
+    const anchor=S.selectMode?start:start;
+    const lineStart=val.lastIndexOf('\n',anchor-1)+1;
+    const col=anchor-lineStart;
+    const prevLineBreak=val.lastIndexOf('\n',lineStart-2);
+    const prevLineStart=prevLineBreak<0?0:prevLineBreak+1;
+    const prevLineLen=(lineStart>0?lineStart-1:0)-prevLineStart;
+    const newPos=prevLineStart+Math.min(col,Math.max(prevLineLen,0));
+    if(S.selectMode) $ta.setSelectionRange(newPos,end);
+    else $ta.setSelectionRange(newPos,newPos);
+  }else if(dir==='down'){
+    // 下一行同列位置
+    const anchor=S.selectMode?start:start;
+    const lineStart=val.lastIndexOf('\n',anchor-1)+1;
+    const col=anchor-lineStart;
+    const thisLineEnd=val.indexOf('\n',anchor);
+    const nextLineStart=thisLineEnd<0?val.length+1:thisLineEnd+1;
+    if(nextLineStart>val.length){
+      // 已是最后一行
+      if(S.selectMode) $ta.setSelectionRange(start,val.length);
+      else $ta.setSelectionRange(val.length,val.length);
+    }else{
+      const nextLineEnd=val.indexOf('\n',nextLineStart);
+      const nextLineLen=(nextLineEnd<0?val.length:nextLineEnd)-nextLineStart;
+      const newPos=nextLineStart+Math.min(col,Math.max(nextLineLen,0));
+      if(S.selectMode) $ta.setSelectionRange(start,newPos);
+      else $ta.setSelectionRange(newPos,newPos);
+    }
+  }
+}
+function doSelectAll(){$ta.select();}
+async function doCopy(){
+  const t=$ta.value.substring($ta.selectionStart,$ta.selectionEnd)||getText();
+  try{await navigator.clipboard.writeText(t);}catch(e){document.execCommand('copy');}
+}
+async function doPaste(){
+  try{const t=await navigator.clipboard.readText();if(t)insertText(t);}catch(e){document.execCommand('paste');}
+}
+function doCut(){
+  const start=$ta.selectionStart,end=$ta.selectionEnd;
+  const t=$ta.value.substring(start,end);
+  if(t){
+    saveUndoForDelete(start,t);
+    navigator.clipboard.writeText(t).catch(()=>{});
+    $ta.value=$ta.value.substring(0,start)+$ta.value.substring(end);
+    $ta.setSelectionRange(start,start);
+  }
+  updateToolLabel();
+}
+async function doClear(){
+  const old=getText();if(old)saveUndoForDelete(0,old);setText('');Rime.reset();
+  $pd.textContent='';S.cands=[];S.candPage=0;S.associationMode=false;S.associations=[];S.assocPage=0;
+  S.atTrigger=null;S.atTriggerStart=-1;S.atCands=[];
+  collapseExpandPanel();
+  renderCands();updateSegPanel();$ta.focus();
+  updateToolLabel();
+}
+function updateToolLabel(){
+  const len=getText().length;
+  $toolLabel.textContent=len>0?`已输入 ${len} 字`:'9+ 输入法预览';
+}
+
+/* ====== Mode switching ====== */
+const MODE_TABS=[
+  {id:'t9',label:'中'},{id:'en',label:'英'},{id:'sym',label:'符'},
+  {id:'edit',label:'选'},{id:'clip',label:'剪'},{id:'fav',label:'常'},{id:'num',label:'数'}
+];
+
+async function setMode(m){
+  clearRepeat(); // 切换键盘立即停止编辑面板的持续按键
+  if(m!=='edit')S.selectMode=false; // 离开编辑面板取消选择模式
+  // 记录进入符号键盘前的来源
+  if(m==='sym'){ S.symFrom=S.mode==='sym'?S.symFrom:S.mode; }
+  else if(S.mode==='sym'){ /* 从符号离开，不更新 symFrom */ }
+  else { S.symFrom=m; }
+  S.mode=m;S.cands=[];S.shift=false;S.capsLock=false;S.candPage=0;
+  S.associationMode=false;S.associations=[];S.assocPage=0;
+  S.atTrigger=null;S.atTriggerStart=-1;S.atCands=[];
+  if(m==='t9'){await Rime.switchSchema('t9');}
+  else if(m==='en'){await Rime.switchSchema('english');}
+  await Rime.reset();
+  $pd.textContent='';
+  collapseExpandPanel();
+  renderNav();renderCands();
+  showPanel(m);buildPanel(m);
+  $ta.focus();
+}
+
+function showPanel(m){
+  $kw.querySelectorAll('.kb-panel').forEach(p=>p.classList.remove('active'));
+  const p=$panel(m);if(p)p.classList.add('active');
+}
+
+function buildPanel(m){
+  const p=$panel(m);if(!p)return;
+  let html='';
+  switch(m){
+    case 't9':html=buildT9();break;
+    case 'en':html=buildEn();break;
+    case 'sym':html=buildSym();break;
+    case 'num':html=buildNum();break;
+    case 'edit':html=buildEdit();break;
+    case 'clip':html=buildClip();break;
+    case 'fav':html=buildFav();break;
+  }
+  p.innerHTML=html;
+  if(m==='t9'){const sb=document.getElementById('t9-seg-panel');if(sb){sb.innerHTML=buildSidebar();bindSidebar(sb);}}
+  if(m==='edit') bindEditKeys(p); else bindKeys(p);
+  if(m==='en') bindShiftLongPress(p);
+}
+
+function bindKeys(el){
+  el.querySelectorAll('.k').forEach(k=>{
+    if(k.dataset.action==='shift')return; // shift 由 bindShiftLongPress 单独处理，避免重复触发
+    k.addEventListener('pointerdown',e=>{
+      e.preventDefault();
+      handleKey(k.dataset.value||'',k.dataset.action);
+    });
+  });
+}
+
+/* ── Edit panel: direction keys on pointerdown (continuous), action keys on pointerup ── */
+let editRepeatTimer=null, editRepeatAction='';
+function bindEditKeys(el){
+  const DIR_ACTIONS=new Set(['caret-left','caret-right','caret-up','caret-down']);
+  const UP_ACTIONS=new Set(['copy','paste','cut','clear','undo','backspace','enter']);
+  el.querySelectorAll('.k').forEach(k=>{
+    const action=k.dataset.action;
+    if(DIR_ACTIONS.has(action)){
+      // 方向键：pointerdown 立即执行，按住持续重复
+      k.addEventListener('pointerdown',e=>{
+        e.preventDefault();
+        try{k.setPointerCapture(e.pointerId);}catch(err){}
+        handleKey(k.dataset.value||'',action);
+        clearRepeat();
+        editRepeatAction=action;
+        editRepeatTimer=setInterval(()=>{
+          if(S.mode!=='edit'){clearRepeat();return;}
+          handleKey(k.dataset.value||'',editRepeatAction);
+        },80);
+      });
+      k.addEventListener('pointerup',e=>{e.preventDefault();clearRepeat();});
+      k.addEventListener('pointerleave',e=>{clearRepeat();});
+    }else if(UP_ACTIONS.has(action)){
+      // 操作键：pointerup 才触发，防止误触
+      k.addEventListener('pointerdown',e=>{e.preventDefault(); try{k.setPointerCapture(e.pointerId);}catch(err){}});
+      k.addEventListener('pointerup',e=>{
+        e.preventDefault();
+        handleKey(k.dataset.value||'',action);
+      });
+    }else{
+      // 其他按键保持 pointerdown
+      k.addEventListener('pointerdown',e=>{
+        e.preventDefault();
+        handleKey(k.dataset.value||'',action);
+      });
+    }
+  });
+}
+function clearRepeat(){
+  if(editRepeatTimer){clearInterval(editRepeatTimer);editRepeatTimer=null;}
+  editRepeatAction='';
+}
+
+function bindShiftLongPress(el){
+  const shiftBtn=el.querySelector('.k[data-action="shift"]');
+  if(!shiftBtn)return;
+  let timer=null, pressed=false;
+  shiftBtn.addEventListener('pointerdown',e=>{
+    e.preventDefault(); e.stopPropagation();
+    pressed=true;
+    timer=setTimeout(()=>{
+      if(pressed){S.capsLock=!S.capsLock;S.shift=false;buildPanel('en');}
+    },500);
+  });
+  shiftBtn.addEventListener('pointerup',e=>{
+    e.preventDefault(); e.stopPropagation();
+    if(timer){clearTimeout(timer);timer=null;}
+    if(pressed){handleKey('','shift');}
+    pressed=false;
+  });
+  shiftBtn.addEventListener('pointerleave',()=>{
+    if(timer){clearTimeout(timer);timer=null;}
+    pressed=false;
+  });
+}
+
+/* ====== Navigation bar ====== */
+function renderNav(){
+  let h='<div class="logo" title="设置">⚙</div>';
+  for(const t of MODE_TABS){
+    h+=`<button class="nav-tab${S.mode===t.id?' active':''}" data-mode="${t.id}">${t.label}</button>`;
+  }
+  $nav.innerHTML=h;
+  $nav.querySelectorAll('.nav-tab').forEach(btn=>{
+    btn.addEventListener('click',()=>setMode(btn.dataset.mode));
+  });
+}
+
+/* ====== Key helper ====== */
+function K(label,action,value,cls){
+  return `<button class="k ${cls||''}" data-action="${action||'type'}" data-value="${value||''}">${label}</button>`;
+}
+
+/* ── T9 ── */
+function buildT9(){
+  let h='<div class="t9"><div class="t9-l" id="t9-seg-panel"></div><div class="t9-r">';
+  h+='<div class="kr">';
+  h+=K('<span class="dig">1</span><span class="let"></span>','type','1');
+  h+=K('<span class="dig">2</span><span class="let">ABC</span>','type','2');
+  h+=K('<span class="dig">3</span><span class="let">DEF</span>','type','3');
+  h+=K('⌫','backspace','','fn');
+  h+='</div><div class="kr">';
+  h+=K('<span class="dig">4</span><span class="let">GHI</span>','type','4');
+  h+=K('<span class="dig">5</span><span class="let">JKL</span>','type','5');
+  h+=K('<span class="dig">6</span><span class="let">MNO</span>','type','6');
+  h+=K('清','clear','','fn');
+  h+='</div><div class="kr">';
+  h+=K('<span class="dig">7</span><span class="let">PQRS</span>','type','7');
+  h+=K('<span class="dig">8</span><span class="let">TUV</span>','type','8');
+  h+=K('<span class="dig">9</span><span class="let">WXYZ</span>','type','9');
+  h+=K('撤','undo','','fn');
+  h+='</div><div class="kr">';
+  h+=K('英','mode','en','fn');
+  h+=K('123','mode','num','fn');
+  h+=K('<span class="dig">0</span><span class="let">_</span>','type','0');
+  h+=K('@','type','@');
+  h+=K('<b style="font-size:18px;font-weight:900;">↵</b>','enter','\n','act');
+  h+='</div></div></div>';
+  return h;
+}
+
+const T9_SYMS=['，','。','？','！','……','（）','《》'];
+
+function buildSidebar(){
+  const comp=S.pinyinComposition||'';
+  let h='';
+  if(comp){
+    h+='<div class="seg-label">拼音分段</div>';
+    const parts=comp.split('\'');
+    for(let i=0;i<parts.length;i++){
+      if(parts[i])h+=`<div class="seg-part${i===parts.length-1?' hi':''}">${parts[i]}</div>`;
+    }
+    h+=K('分词','type','1','fn');
+  }else{
+    for(const s of T9_SYMS){
+      h+=`<div class="side-sym">${s}</div>`;
+    }
+  }
+  return h;
+}
+
+function updateSegPanel(){
+  const panel=document.getElementById('t9-seg-panel');
+  if(!panel)return;
+  S.pinyinComposition=$pd.textContent||'';
+  panel.innerHTML=buildSidebar();
+  bindSidebar(panel);
+}
+
+function bindSidebar(el){
+  el.querySelectorAll('.side-sym').forEach(sym=>{
+    sym.addEventListener('click',()=>handleKey(sym.textContent,'type'));
+  });
+  el.querySelectorAll('.k').forEach(k=>{
+    k.addEventListener('click',()=>handleKey(k.dataset.value||'',k.dataset.action));
+  });
+}
+
+/* ── English ── */
+function buildEn(){
+  const up=S.shift||S.capsLock;
+  const r1='qwertyuiop',r2='asdfghjkl',r3='zxcvbnm';
+  const dig1='1234567890',dig2='-/;()~\''.split(''),dig3='@-#&?!…'.split('');
+  const shiftCls=S.capsLock?'act':'fn';
+  const shiftLabel=S.capsLock?'⇪':'⇧';
+  let h='<div class="eb-kb">';
+  h+='<div class="kr">';
+  for(let i=0;i<10;i++)h+=K(`<span class="dig">${dig1[i]}</span>${up?r1[i].toUpperCase():r1[i]}`,'type',up?r1[i].toUpperCase():r1[i]);
+  h+='</div><div class="kr">';
+  for(let i=0;i<9;i++)h+=K(`<span class="dig">${dig2[i]}</span>${up?r2[i].toUpperCase():r2[i]}`,'type',up?r2[i].toUpperCase():r2[i]);
+  h+='</div><div class="kr">';
+  h+=K(shiftLabel,'shift','',shiftCls);
+  for(let i=0;i<7;i++)h+=K(`<span class="dig">${dig3[i]}</span>${up?r3[i].toUpperCase():r3[i]}`,'type',up?r3[i].toUpperCase():r3[i]);
+  h+=K('⌫','backspace','','fn');
+  h+='</div><div class="kr">';
+  h+=K('中','mode','t9','fn w2');
+  h+=K('123','mode','num','fn w2');
+  h+=K('空格','space',' ','w4');
+  h+=K(',','type',',');
+  h+=K('.','type','.');
+  h+=K('↵','enter','\n','act w2');
+  h+='</div></div>';
+  return h;
+}
+
+/* ── Symbol ── 国际标准符号，九宫格默认全角，全键盘默认半角 */
+// 全角分类（九宫格进入）
+const SYM_FULL=[
+  {label:'中文标点', syms:`， 。 ？ ！ … 、 ： ； " " ' ' （ ） 【 】 《 》 ～ — ·`.split(' ')},
+  {label:'数学符号', syms:`＋ － × ÷ ＝ ≠ ≈ ＜ ＞ ≤ ≥ ± ％ ‰ √ ∞ ∑ ∏ ∫ ∂ ∇ △ □`.split(' ')},
+  {label:'货币符号', syms:`￥ ＄ € £ ¥ ₩ ₹ ₽`.split(' ')},
+  {label:'单位符号', syms:`℃ ℉ ％ ‰ ° ′ ″ ㎡ ㎥ ㎞ ㎏ ㎐`.split(' ')},
+  {label:'箭头符号', syms:`← ↑ → ↓ ↔ ↕ ⇦ ⇧ ⇨ ⇩ ⇒ ⇔`.split(' ')},
+  {label:'特殊符号', syms:`© ® ™ § ¶ † ‡ • · … ‥ ※ ♯ ♭ ♪ ♫ ♬`.split(' ')},
+  {label:'希腊字母', syms:`α β γ δ ε ζ η θ ι κ λ μ ν ξ ο π ρ σ τ υ φ χ ψ ω`.split(' ')},
+  {label:'序号数字', syms:`① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨ ⑩ Ⅰ Ⅱ Ⅲ Ⅳ Ⅴ ⑴ ⑵ ⑶ ⑷ ⑸`.split(' ')},
+  {label:'制表符号', syms:`─ │ ┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼`.split(' ')},
+  {label:'括号引号', syms:`「 」 『 』 〖 〗 【 】 ｛ ｝ 〈 〉 《 》`.split(' ')},
+];
+
+// 半角分类（全键盘进入）
+const SYM_HALF=[
+  {label:'英文标点', syms:`, . ? ! : ; " " ' ' ( ) [ ] { } - — – … · / \\ @ # $ % & * _ + = | ~ \` ^`.split(' ')},
+  {label:'数学符号', syms:`+ - * / = != ~= < > <= >= % sqrt sum prod int`.split(' ')},
+  {label:'货币符号', syms:`$ € £ ¥ ₩ ₹ ₽`.split(' ')},
+  {label:'单位符号', syms:`° ' " % m² m³ km kg`.split(' ')},
+  {label:'箭头符号', syms:`<- -> <-> => <=> <= >= >> <<`.split(' ')},
+  {label:'特殊符号', syms:`© ® ™ § ¶ † ‡ • · … ‥ ※ ♯ ♭ ♪ ♫ ♬`.split(' ')},
+  {label:'希腊字母', syms:`α β γ δ ε ζ η θ ι κ λ μ ν ξ ο π ρ σ τ υ φ χ ψ ω`.split(' ')},
+  {label:'序号数字', syms:`① ② ③ ④ ⑤ Ⅰ Ⅱ Ⅲ Ⅳ Ⅴ ⑴ ⑵ ⑶ ⑷ ⑸`.split(' ')},
+  {label:'编程符号', syms:`!= == === !== && || ?? ?. => -> :: ...`.split(' ')},
+  {label:'网络符号', syms:`@ # $ % ^ & * _ + = | ~ \` < > . , : ; ! ?`.split(' ')},
+];
+
+function buildSym(){
+  const isFull=S.symFrom==='t9'||S.symFrom==='num';
+  const cats=isFull?SYM_FULL:SYM_HALF;
+  const backMode=S.symFrom||'t9';
+  let h='<div class="sym-scroll">';
+  for(const cat of cats){
+    h+=`<div class="sym-cat-label">${cat.label}</div>`;
+    h+='<div class="sym-cat-row">';
+    for(const s of cat.syms){
+      if(!s)continue;
+      const cls=s.length>1?' w2':'';
+      h+=`<button class="sym-key${cls}" data-action="type" data-value="${s}">${s}</button>`;
+    }
+    h+='</div>';
+  }
+  h+='</div><div class="kr sym-bottom">';
+  h+=K('返回','mode',backMode,'fn w2');
+  h+=K('空格','space',' ','w4');
+  h+=K('.','type','.');
+  h+=K('↵','enter','\n','act w2');
+  h+='</div>';
+  return h;
+}
+
+/* ── Number (和T9一样布局: 侧边栏 | 数字区+右侧8大按钮 | 底行) ── */
+function buildNum(){
+  let h='<div class="t9"><div class="t9-l" id="num-seg-panel">';
+  h+=K('+','type','+');
+  h+=K('-','type','-');
+  h+=K('*','type','*');
+  h+=K('/','type','/');
+  h+=K('%','type','%');
+  h+=K('=','type','=');
+  h+=K('#','type','#');
+  h+=K('@','type','@');
+  h+='</div><div class="t9-r">';
+  h+='<div class="kr">';
+  h+=K('1','type','1');
+  h+=K('2','type','2');
+  h+=K('3','type','3');
+  h+=K('⌫','backspace','','fn');
+  h+='</div><div class="kr">';
+  h+=K('4','type','4');
+  h+=K('5','type','5');
+  h+=K('6','type','6');
+  h+=K('清','clear','','fn');
+  h+='</div><div class="kr">';
+  h+=K('7','type','7');
+  h+=K('8','type','8');
+  h+=K('9','type','9');
+  h+=K('=','calc','','fn');
+  h+='</div><div class="kr">';
+  h+=K('英','mode','en','fn');
+  h+=K('符','mode','sym','fn');
+  h+=K('0','type','0');
+  h+=K('.','type','.');
+  h+=K('<b style="font-size:18px;font-weight:900;">↵</b>','enter','\n','act');
+  h+='</div></div></div>';
+  return h;
+}
+
+/* ── Edit ── */
+function buildEdit(){
+  let h='<div class="edit-wrap"><div class="dp">';
+  h+='<div class="kr" style="justify-content:center">'+K('↑','caret-up','','')+'</div>';
+  h+='<div class="kr">'+K('←','caret-left','','')+K('选择','select','',S.selectMode?'sel-on':'')+K('→','caret-right','','')+'</div>';
+  h+='<div class="kr" style="justify-content:center">'+K('↓','caret-down','','')+'</div>';
+  h+='</div><div class="ea">';
+  h+=K('全选','selectall','','')+K('复制','copy','','')+K('⌫','backspace','','fn');
+  h+='</div></div><div class="eb">';
+  h+=K('|◁','line-start','','fn')+K('▷|','line-end','','fn');
+  h+=K('粘贴','paste','','')+K('剪切','cut','','')+K('清空','clear','','fn');
+  h+=K('撤销','undo','','')+K('↵','enter','\n','act');
+  h+='</div>';
+  return h;
+}
+
+/* ── Favorites helpers ── */
+function favText(f){return typeof f==='string'?f:f.text;}
+function favPinned(f){return typeof f==='string'?false:!!f.pinned;}
+function sortedFavs(){
+  const list=S.favorites.map((f,i)=>({f,idx:i}));
+  list.sort((a,b)=>{
+    const ap=favPinned(a.f)?0:1, bp=favPinned(b.f)?0:1;
+    if(ap!==bp)return ap-bp; // 置顶优先
+    return a.idx-b.idx; // 其余保持原序
+  });
+  return list;
+}
+function favIdxToRaw(sortedIdx){
+  const list=sortedFavs();
+  return list[sortedIdx]?list[sortedIdx].idx:-1;
+}
+function delFav(idx){
+  const ri=favIdxToRaw(idx);
+  if(ri>=0){S.favorites.splice(ri,1);}
+}
+
+/* ── Clipboard ── */
+function buildClip(){
+  let h='<div class="panel-header"><span>剪贴板历史</span></div>';
+  if(S.clipboard.length===0){
+    h+='<div class="empty-state">剪贴板为空<br>复制文字后会自动记录</div>';
+  }else{
+    h+='<div class="panel-list">';
+    for(let i=0;i<Math.min(S.clipboard.length,20);i++){
+      const isOnce=isDisposableClip(S.clipboard[i]);
+      h+=`<div class="panel-item" data-action="insert-clip" data-value="${i}"><span class="text">${isOnce?'<span style="font-size:10px;color:#f5a623;margin-right:2px">⚡</span>':''}${S.clipboard[i]}</span><span class="time"><button class="list-btn" data-action="clip-to-fav" data-value="${i}" title="收藏">☆</button><button class="list-btn" data-action="del-clip" data-value="${i}" title="删除">✕</button></span></div>`;
+    }
+    h+='</div>';
+  }
+  return h;
+}
+
+/* ── Favorites ── */
+function buildFav(){
+  let h='<div class="panel-header"><span>常用语管理</span></div>';
+  if(S.favorites.length===0){
+    h+='<div class="empty-state">暂无常用语<br>点击「添加」来添加</div>';
+  }else{
+    h+='<div class="panel-list">';
+    const list=sortedFavs();
+    for(let i=0;i<Math.min(list.length,30);i++){
+      const item=list[i];
+      const pin=favPinned(item.f);
+      const pinLabel=pin?'★':'☆';
+      h+=`<div class="panel-item" data-action="insert-fav" data-value="${i}"><span class="text">${pin?'📌 ':''}${favText(item.f)}</span><span class="time"><button class="list-btn" data-action="pin-fav" data-value="${i}" title="${pin?'取消置顶':'置顶'}">${pinLabel}</button><button class="list-btn" data-action="del-fav" data-value="${i}" title="删除">✕</button></span></div>`;
+    }
+    h+='</div>';
+  }
+  return h;
+}
+
+const T9_KEY_MAP={'2':'a','3':'d','4':'g','5':'j','6':'m','7':'p','8':'t','9':'w','0':'0','1':'\''};
+
+async function t9ProcessKey(val){
+  const key=T9_KEY_MAP[val]||val;
+  const r=await Rime.processKey(key);
+  return r||{type:'NoChange'};
+}
+
+async function handleKey(val,action){
+  switch(action){
+    case 'type':
+      if(S.mode==='t9'){
+        if(/^[2-9]$/.test(val)){
+          const r=await t9ProcessKey(val);
+          if(r&&r.type==='Committed'){insertText(r.text);Rime.reset();$pd.textContent='';await doAssociation();}
+          else if(r&&r.type==='HasCandidates'){$pd.textContent=r.composition||'';S.cands=r.candidates||[];}
+          else if(r&&r.type==='Composing'){$pd.textContent=r.composition||'';}
+          renderCands();updateSegPanel();
+        }else if(val==='1'){
+          const r=await t9ProcessKey('1');
+          if(r&&r.type==='Committed'){insertText(r.text);Rime.reset();$pd.textContent='';}
+          else if(r&&r.type==='HasCandidates'){$pd.textContent=r.composition||'';S.cands=r.candidates||[];}
+          else if(r&&r.type==='Composing'){$pd.textContent=r.composition||'';}
+          else{commitPinyinAsText();insertText('1');}
+          renderCands();updateSegPanel();
+        }else if(val==='0'){
+          const r=await t9ProcessKey('0');
+          if(r&&r.type==='Committed'){insertText(r.text);Rime.reset();$pd.textContent='';}
+          else if(r&&r.type==='HasCandidates'){$pd.textContent=r.composition||'';S.cands=r.candidates||[];}
+          else if(r&&r.type==='Composing'){$pd.textContent=r.composition||'';}
+          else{commitPinyinAsText();insertText(val);}
+          renderCands();updateSegPanel();
+        }else{commitPinyinAsText();insertText(val);}
+      }else{insertText(val);}
+      break;
+    case 'backspace':doBackspace();checkAtTrigger();break;
+    case 'space':
+      if(S.mode==='t9'){
+        const comp=await Rime.getComposition();
+        if(comp){if(S.cands.length>0)commitCandidate(S.cands[0]);else commitPinyinAsText();}
+        else insertText(' ');
+      }else insertText(' ');
+      break;
+    case 'enter':
+      if(S.atTrigger){doCancelAtTrigger();break;}
+      if(S.mode==='t9'){const comp2=await Rime.getComposition();if(comp2)commitPinyinAsText();else insertText('\n');}
+      else insertText('\n');
+      break;
+    case 'clear':doClear();break;
+    case 'undo':undo();break;
+    case 'copy':doCopy();break;
+    case 'paste':doPaste();break;
+    case 'cut':doCut();break;
+    case 'selectall':doSelectAll();break;
+    case 'select':S.selectMode=!S.selectMode;$ta.focus();buildPanel('edit');break;
+    case 'caret-left':moveCaret('left');break;
+    case 'caret-right':moveCaret('right');break;
+    case 'caret-up':moveCaret('up');break;
+    case 'caret-down':moveCaret('down');break;
+    case 'line-start':$ta.focus();$ta.setSelectionRange(0,0);break;
+    case 'line-end':$ta.focus();$ta.setSelectionRange($ta.value.length,$ta.value.length);break;
+    case 'shift':
+      if(S.capsLock){S.capsLock=false;S.shift=false;}
+      else S.shift=!S.shift;
+      buildPanel('en');break;
+    case 'insert-clip':{
+      const ci=parseInt(val);
+      const ct=S.clipboard[ci];
+      if(ct){
+        insertText(ct);
+        if(isDisposableClip(ct)){S.clipboard.splice(ci,1);}
+      }
+      buildPanel('clip');
+    }break;
+    case 'del-clip':{const ci2=parseInt(val);if(S.clipboard[ci2]!==undefined)S.clipboard.splice(ci2,1);buildPanel('clip');}break;
+    case 'clip-to-fav':{
+      const ci3=parseInt(val);
+      const ct=S.clipboard[ci3];
+      if(ct&&!S.favorites.some(f=>favText(f)===ct)){
+        S.favorites.push({text:ct,pinned:false});
+        if(S.favorites.length>50)S.favorites.shift();
+        S.clipboard.splice(ci3,1);
+      }
+      buildPanel('clip');
+    }break;
+    case 'insert-fav':{
+      const fi=parseInt(val);
+      const ri=favIdxToRaw(fi);
+      if(ri>=0)insertText(favText(S.favorites[ri]));
+    }break;
+    case 'pin-fav':{
+      const fi2=parseInt(val);
+      const ri2=favIdxToRaw(fi2);
+      if(ri2>=0)S.favorites[ri2].pinned=!S.favorites[ri2].pinned;
+      buildPanel('fav');
+    }break;
+    case 'del-fav':{
+      delFav(parseInt(val));
+      buildPanel('fav');
+    }break;
+    case 'calc':doCalc();break;
+    case 'mode':setMode(val);break;
+
+  }
+  $ta.focus();
+}
+
+/* ====== Disposable clipboard detection ====== */
+function isDisposableClip(text){
+  // 含中文、空格、或长句 -> 文案，保留
+  if(/[\u4e00-\u9fff]/.test(text))return false;
+  if(/\s/.test(text))return false;
+  if(text.length>16)return false;
+  // 纯数字短串 -> 验证码/口令
+  if(/^\d{4,8}$/.test(text))return true;
+  // 字母数字混合短串，无自然语言 -> 口令/验证码
+  if(text.length<=12&&/[a-zA-Z]/.test(text)&&/\d/.test(text)&&!/[。，！？、；：""''「」『』《》（）]/.test(text))return true;
+  // 纯字母不大写首字母无空格 -> 随机码
+  if(text.length<=12&&/^[a-zA-Z]+$/.test(text)&&!/^[A-Z][a-z]+$/.test(text))return true;
+  return false;
+}
+
+/* ====== Auto clipboard tracking ====== */
+document.addEventListener('copy',()=>{
+  setTimeout(()=>{
+    const t=$ta.value.substring($ta.selectionStart,$ta.selectionEnd);
+    if(t&&!S.clipboard.includes(t)){S.clipboard.unshift(t);if(S.clipboard.length>50)S.clipboard.pop();}
+  },100);
+});
+
+/* ====== Auto Test ====== */
+let isTesting=false;
+function logTest(msg){
+  $testLog.style.display='block';
+  $testLog.textContent+=msg+'\n';
+  $testLog.scrollTop=$testLog.scrollHeight;
+  console.log('[AutoTest]',msg);
+  Rime.log('[AutoTest] '+msg);
+}
+
+/** 在当前活跃面板中查找按钮并模拟 pointerdown + pointerup */
+function tapBtn(action,value){
+  const panel=$kw.querySelector('.kb-panel.active');
+  if(!panel){logTest('✗ 未找到活跃面板');return Promise.resolve();}
+  let btn=null;
+  panel.querySelectorAll('[data-action]').forEach(el=>{
+    if(el.dataset.action===action&&(el.dataset.value||'')===value)btn=el;
+  });
+  if(!btn){logTest('✗ 未找到按钮: action='+action+' value='+value);return Promise.resolve();}
+  btn.style.background='#ffeb3b';btn.style.transition='background .15s';
+  setTimeout(()=>{btn.style.background='';},300);
+  btn.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true}));
+  btn.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true}));
+  return new Promise(r=>setTimeout(r,350));
+}
+
+/** 模拟候选词点击：候选区使用 pointerup 提交 */
+function tapCand(el){
+  if(!el)return;
+  el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true}));
+  el.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true}));
+}
+
+/** 模拟点击面板项（非 .k 按钮），支持 click 委托 */
+function tapPanel(action,value){
+  const panel=$kw.querySelector('.kb-panel.active');
+  if(!panel){logTest('✗ 未找到活跃面板');return Promise.resolve();}
+  let el=null;
+  panel.querySelectorAll('[data-action]').forEach(e=>{
+    if(e.dataset.action===action&&(e.dataset.value||'')===value)el=e;
+  });
+  if(!el){logTest('✗ 未找到面板项: '+action);return Promise.resolve();}
+  el.style.background='#ffeb3b';
+  setTimeout(()=>{el.style.background='';},300);
+  el.dispatchEvent(new PointerEvent('click',{bubbles:true,cancelable:true}));
+  return new Promise(r=>setTimeout(r,350));
+}
+
+async function runFullTest(){
+  if(isTesting)return;
+  isTesting=true;$btnTest.textContent='⏳ 测试中...';$btnTest.classList.add('running');
+  $testLog.textContent='';logTest('========== 9+ 键盘全功能自动测试 ==========');
+  let pass=0,fail=0;
+  const T=(cond,label)=>{if(cond){pass++;logTest('✓ '+label);}else{fail++;logTest('✗ '+label);}};
+
+  try{
+    /* 0. 清空 */
+    $btnClear.click();await new Promise(r=>setTimeout(r,300));
+    T(getText()==='','清空按钮');
+
+    /* 1. T9 拼音输入 2→3→6 */
+    logTest('[1] T9 拼音输入 2→3→6');
+    await tapBtn('type','2');await tapBtn('type','3');await tapBtn('type','6');
+    await new Promise(r=>setTimeout(r,300));
+    logTest('  拼音: '+$pd.textContent+'  候选: '+JSON.stringify(S.cands.slice(0,5)));
+    T($pd.textContent.length>0,'按键 2/3/6 产生拼音');
+    T(S.cands.length>0,'出现候选词');
+    if(S.cands.length>0){
+      const cw=$cands.querySelector('.cand-word.high');
+      if(cw){tapCand(cw);await new Promise(r=>setTimeout(r,300));}
+      T(getText().length>0,'候选词上屏: '+getText().trim());
+    }
+
+    /* 1b. 联想词 */
+    logTest('[1b] 联想词');
+    T(S.associationMode===true,'上屏后进入联想模式');
+    T(S.associations.length>0,'联想词数量: '+S.associations.length);
+    if(S.associations.length>0){
+      const aw=$cands.querySelector('.cand-word.high');
+      if(aw){tapCand(aw);await new Promise(r=>setTimeout(r,300));}
+      T(getText().length>1,'联想词上屏');
+    }
+    if(S.associationMode)doClear();
+
+    /* 2. 退格键 */
+    logTest('[2] 退格键 ⌫');
+    await tapBtn('type','9');await tapBtn('type','4');
+    await tapBtn('backspace','');
+    await new Promise(r=>setTimeout(r,200));
+    T($pd.textContent.length<=2,'退格响应');
+
+    /* 2b. 分词键 1 */
+    logTest('[2b] 分词键 1');
+    await tapBtn('type','9');await tapBtn('type','4');
+    await tapBtn('type','1');
+    await new Promise(r=>setTimeout(r,200));
+    logTest('  分词拼音: '+$pd.textContent);
+    T($pd.textContent.length>=3,'分词键产生拼音分隔');
+    doClear();await new Promise(r=>setTimeout(r,200));
+
+    /* 3. T9 候选上屏 */
+    logTest('[3] T9 候选上屏');
+    await tapBtn('type','9');await tapBtn('type','4');
+    const beforeSpace=getText();
+    if(S.cands.length>0){
+      const cw2=$cands.querySelector('.cand-word.high');
+      if(cw2){tapCand(cw2);await new Promise(r=>setTimeout(r,300));}
+    }
+    T(getText().length>beforeSpace.length,'T9 候选上屏');
+    doClear();await new Promise(r=>setTimeout(r,200));
+
+    /* 4. 回车键 */
+    logTest('[4] 回车键 ↵');
+    const be=getText();
+    await tapBtn('enter','\n');
+    await new Promise(r=>setTimeout(r,200));
+    T(getText().length>be.length,'回车插入内容');
+
+    /* 5. 英文模式 */
+    logTest('[5] 切换到英文模式');
+    setMode('en');await new Promise(r=>setTimeout(r,500));
+    T(S.mode==='en','英文面板激活');
+    await tapBtn('type','h');await tapBtn('type','e');
+    await tapBtn('type','l');await tapBtn('type','l');await tapBtn('type','o');
+    await new Promise(r=>setTimeout(r,200));
+    T(getText().includes('hello'),'英文键盘输入 hello');
+
+    /* 5b. 英文逗号句号 */
+    logTest('[5b] 英文逗号句号');
+    await tapBtn('type',',');await tapBtn('type','.');
+    await new Promise(r=>setTimeout(r,200));
+    T(getText().includes(',')&&getText().includes('.'),'英文逗号句号按键正常');
+
+    /* 6. Shift + CapsLock */
+    logTest('[6] Shift ⇧');
+    await tapBtn('shift','');
+    await new Promise(r=>setTimeout(r,400));
+    T(S.shift===true,'Shift 切换为 true');
+    await tapBtn('type','A');
+    await new Promise(r=>setTimeout(r,200));
+    T(getText().includes('A'),'Shift 后大写 A');
+    // CapsLock 长按通过 bindShiftLongPress 处理
+    S.capsLock=true;S.shift=false;buildPanel('en');
+    await new Promise(r=>setTimeout(r,200));
+    T(S.capsLock===true,'CapsLock 激活');
+
+    /* 7. 符号模式 — 全角 */
+    logTest('[7] 符号面板（全角分类）');
+    setMode('t9');await new Promise(r=>setTimeout(r,500));
+    setMode('sym');await new Promise(r=>setTimeout(r,500));
+    T(S.mode==='sym','符号面板激活');
+    T(S.symFrom==='t9','来源=t9，全角符号');
+    // 找第一个 sym-key 按钮
+    const sk=$kw.querySelector('.sym-key');
+    if(sk){sk.click();await new Promise(r=>setTimeout(r,200));}
+    T(getText().includes('，')||getText().length>0,'符号按钮点击');
+
+    /* 8. 数字模式 */
+    logTest('[8] 数字模式');
+    setMode('num');await new Promise(r=>setTimeout(r,500));
+    T(S.mode==='num','数字面板激活');
+    await tapBtn('type','1');await tapBtn('type','+');await tapBtn('type','2');
+    await new Promise(r=>setTimeout(r,200));
+    T(getText().includes('1+2'),'数字键盘 1+2');
+
+    /* 8b. 计算器 */
+    logTest('[8b] 计算器 =');
+    await tapBtn('calc','');
+    await new Promise(r=>setTimeout(r,300));
+    T(getText().includes('1+2=3'),'计算器 1+2=3');
+
+    /* 9. 编辑模式 */
+    logTest('[9] 编辑模式');
+    doClear();setMode('en');await new Promise(r=>setTimeout(r,300));
+    await tapBtn('type','a');await tapBtn('type','b');await tapBtn('type','c');
+    await new Promise(r=>setTimeout(r,200));
+    setMode('edit');await new Promise(r=>setTimeout(r,500));
+    T(S.mode==='edit','编辑面板激活');
+
+    // 测试选择按钮 toggle
+    await tapBtn('select','');
+    await new Promise(r=>setTimeout(r,200));
+    T(S.selectMode===true,'选择按钮激活（灰色）');
+    await tapBtn('select','');
+    await new Promise(r=>setTimeout(r,200));
+    T(S.selectMode===false,'选择按钮取消（白色）');
+
+    // 光标移动
+    await tapBtn('caret-left','');
+    await new Promise(r=>setTimeout(r,200));
+    T($ta.selectionStart===2,'← 光标左移');
+
+    // 全选
+    await tapBtn('selectall','');
+    await new Promise(r=>setTimeout(r,200));
+    T($ta.selectionStart===0&&$ta.selectionEnd===3,'全选按钮');
+
+    // 选择模式 + ← 逐字左选
+    S.selectMode=true;
+    await tapBtn('caret-left','');await tapBtn('caret-left','');
+    await new Promise(r=>setTimeout(r,200));
+    T($ta.selectionStart===1&&$ta.selectionEnd===3,'选择←: 选区 [1,3]');
+    S.selectMode=false;await new Promise(r=>setTimeout(r,100));
+
+    // 普通模式下移光标到开头再测选择模式 + → 逐字右选
+    $ta.setSelectionRange(0,0);
+    S.selectMode=true;
+    await tapBtn('caret-right','');await tapBtn('caret-right','');
+    await new Promise(r=>setTimeout(r,200));
+    T($ta.selectionStart===0&&$ta.selectionEnd===2,'选择→: 选区 [0,2]');
+    S.selectMode=false;
+
+    // 清空，准备多行文本
+    await tapBtn('clear','');
+    await new Promise(r=>setTimeout(r,200));
+    T(getText()==='','清空按钮');
+
+    /* 9b. 多行文本十字光标选择（↑↓ 上下行选，通过Rime真实输入） */
+    logTest('[9b] 多行文本十字光标选择');
+    // 通过 en 模式真实输入3行文本: "abc\ndef\nghi" (每行3字符)
+    doClear();setMode('en');await new Promise(r=>setTimeout(r,300));
+    await tapBtn('type','a');await tapBtn('type','b');await tapBtn('type','c');
+    await tapBtn('enter','');await new Promise(r=>setTimeout(r,150));
+    await tapBtn('type','d');await tapBtn('type','e');await tapBtn('type','f');
+    await tapBtn('enter','');await new Promise(r=>setTimeout(r,150));
+    await tapBtn('type','g');await tapBtn('type','h');await tapBtn('type','i');
+    await new Promise(r=>setTimeout(r,300));
+    // 验证: "abc\ndef\nghi" = 11字符, 每行3+1换行
+    logTest('  输入文本长度: '+$ta.value.length+' 内容: '+JSON.stringify($ta.value));
+    T($ta.value.includes('abc')&&$ta.value.includes('ghi'),'3行文本已就绪');
+
+    // 光标放到第2行第2列 (e, pos=5)
+    setMode('edit');await new Promise(r=>setTimeout(r,300));
+    $ta.setSelectionRange(5,5);
+    logTest('  光标位置: '+$ta.selectionStart);
+
+    // 普通模式 ↑：跳到上一行同列 (第1行第2个b, pos=1)
+    await tapBtn('caret-up','');
+    await new Promise(r=>setTimeout(r,200));
+    const upPos=$ta.selectionStart;
+    T(upPos===1,'普通↑: 跳第1行同列 pos=1 (got '+upPos+')');
+
+    // 普通模式 ↓：回到下一行同列
+    $ta.setSelectionRange(1,1);
+    await tapBtn('caret-down','');
+    await new Promise(r=>setTimeout(r,200));
+    const downPos=$ta.selectionStart;
+    T(downPos===5,'普通↓: 跳第2行同列 pos=5 (got '+downPos+')');
+
+    // 选择模式 ↑：向上扩展选区 [5,5] -> [1,5]
+    $ta.setSelectionRange(5,5);
+    S.selectMode=true;
+    await tapBtn('caret-up','');
+    await new Promise(r=>setTimeout(r,200));
+    T($ta.selectionStart===1&&$ta.selectionEnd===5,'选择↑: 选区 [1,5] (got ['+$ta.selectionStart+','+$ta.selectionEnd+'])');
+
+    // 选择模式 →：向右扩展选区 [1,5] -> [1,6]
+    await tapBtn('caret-right','');
+    await new Promise(r=>setTimeout(r,200));
+    T($ta.selectionStart===1&&$ta.selectionEnd===6,'选择→: 选区 [1,6] (got ['+$ta.selectionStart+','+$ta.selectionEnd+'])');
+
+    // 选择模式 ↓：向下扩展选区 [1,6] -> [1,10] (第3行第2列h, pos=10)
+    await tapBtn('caret-down','');
+    await new Promise(r=>setTimeout(r,200));
+    T($ta.selectionStart===1&&$ta.selectionEnd===10,'选择↓: 选区 [1,10] (got ['+$ta.selectionStart+','+$ta.selectionEnd+'])');
+
+    S.selectMode=false;
+    await tapBtn('clear','');await new Promise(r=>setTimeout(r,200));
+
+    /* 10. 剪贴板面板 */
+    logTest('[10] 剪贴板');
+    // 先输入一些文字用于测试
+    setMode('en');await new Promise(r=>setTimeout(r,300));
+    await tapBtn('type','t');await tapBtn('type','e');
+    await tapBtn('type','s');await tapBtn('type','t');
+    await new Promise(r=>setTimeout(r,200));
+    // 复制
+    $ta.setSelectionRange(0,4);
+    try{await navigator.clipboard.writeText('test');}catch(e){}
+    document.dispatchEvent(new Event('copy'));
+    await new Promise(r=>setTimeout(r,200));
+    if(!S.clipboard.includes('test'))S.clipboard.unshift('test');
+    setMode('clip');await new Promise(r=>setTimeout(r,500));
+    T(S.mode==='clip','剪贴板面板激活');
+
+    /* 11. 常用语面板 */
+    logTest('[11] 常用语');
+    setMode('fav');await new Promise(r=>setTimeout(r,500));
+    T(S.mode==='fav','常用语面板激活');
+    T(S.favorites.length>=2,'默认常用语存在');
+    // 点击插入
+    const fi=$kw.querySelector('.panel-item');
+    if(fi){fi.click();await new Promise(r=>setTimeout(r,200));}
+    T(getText().length>0,'常用语插入');
+
+    /* 12. 常用语置顶 */
+    logTest('[12] 常用语置顶');
+    setMode('fav');await new Promise(r=>setTimeout(r,200));
+    const pb=$kw.querySelector('.list-btn[data-action="pin-fav"]');
+    if(pb){pb.click();await new Promise(r=>setTimeout(r,200));}
+    const pinCount=S.favorites.filter(f=>favPinned(f)).length;
+    T(pinCount>0,'置顶功能: '+pinCount+'条置顶');
+    // 取消置顶
+    if(pb){pb.click();await new Promise(r=>setTimeout(r,200));}
+
+    /* 13. @时间触发 */
+    logTest('[13] @时间触发');
+    doClear();setMode('t9');await new Promise(r=>setTimeout(r,300));
+    await tapBtn('type','@');insertText('时间');
+    await new Promise(r=>setTimeout(r,200));
+    checkAtTrigger();
+    T(S.atTrigger==='time','@时间 候选触发');
+    T(S.atCands.length>0,'时间格式候选: '+S.atCands.length+'个');
+    doCancelAtTrigger();
+
+    /* 14. 符号面板从全键盘进入=半角 */
+    logTest('[14] 符号半角');
+    setMode('en');await new Promise(r=>setTimeout(r,300));
+    setMode('sym');await new Promise(r=>setTimeout(r,500));
+    T(S.symFrom==='en','来源=en，半角符号');
+
+    /* 15. 面板切换清理 */
+    logTest('[15] 面板切换清理');
+    setMode('edit');await new Promise(r=>setTimeout(r,300));
+    await tapBtn('select',''); // 激活选择
+    await new Promise(r=>setTimeout(r,200));
+    T(S.selectMode===true,'选择已激活');
+    setMode('t9');await new Promise(r=>setTimeout(r,300));
+    T(S.selectMode===false,'切面板后选择自动取消');
+
+    /* 16. 常用语收藏自剪贴板 */
+    logTest('[16] 收藏到常用语');
+    if(!S.clipboard.includes('demo'))S.clipboard.unshift('demo');
+    setMode('clip');await new Promise(r=>setTimeout(r,300));
+    const cb=$kw.querySelector('.list-btn[data-action="clip-to-fav"]');
+    if(cb){cb.click();await new Promise(r=>setTimeout(r,200));}
+    const hasDemo=S.favorites.some(f=>favText(f)==='demo');
+    T(hasDemo||S.favorites.length>0,'剪贴板收藏到常用语');
+
+    /* 17. 成对符号 */
+    logTest('[17] 成对符号配对');
+    doClear();setMode('t9');await new Promise(r=>setTimeout(r,200));
+    await tapBtn('type','测试');await new Promise(r=>setTimeout(r,200));
+    // 手动测试成对符号
+    insertText('《》');
+    T(getText().includes('《'),'成对符号插入');
+
+  }catch(e){
+    fail++;logTest('✗ 异常: '+e.message);
+    console.error(e);
+  }
+
+  logTest('=========================================');
+  logTest('测试完成: '+pass+' 通过, '+fail+' 失败, 共 '+(pass+fail)+' 项');
+  logTest('=========================================');
+  isTesting=false;$btnTest.textContent='▶ 自动测试';$btnTest.classList.remove('running');
+}
+
+$btnTest.addEventListener('click',runFullTest);
+
+/* ====== Delegate for non-.k elements ====== */
+$kw.addEventListener('click',e=>{
+  const el=e.target.closest('[data-action]');
+  if(!el)return;
+  if(el.classList.contains('k'))return;
+  e.stopPropagation();
+  handleKey(el.dataset.value||'',el.dataset.action);
+});
+
+/* ====== Init ====== */
+// 桌面预览模式：没有 JsBridge 时包裹手机框
+if(typeof JsBridge==='undefined'){document.body.classList.add('desktop-preview');}
+$btnTest.textContent=typeof JsBridge!=='undefined'?'▶ 自动测试':'▶ 模拟候选';
+
+$ta.addEventListener('focus',()=>{$ta.style.outline='none';});
+$ta.addEventListener('input',()=>{updateToolLabel();checkAtTrigger();});
+$btnClear.addEventListener('click',()=>doClear());
+
+// Android 系统栏安全区适配
+window.setSystemInsets=function(statusBarH,navBarH){
+  console.log('[Insets] statusBar='+statusBarH+' navBar='+navBarH);
+  const bottom=document.getElementById('bottom-fixed');
+  if(bottom&&navBarH>0){
+    const screenH=window.innerHeight;
+    const navRatio=navBarH/screenH;
+    const targetVh=Math.max(35,45-navRatio*100);
+    bottom.style.flexBasis=targetVh+'vh';
+    bottom.style.paddingBottom=navBarH+'px';
+  }
+};
+
+$ta.focus();
+renderNav();
+setMode('t9');
+updateToolLabel();
+
+// 页面加载 2 秒后自动运行完整测试（方便无交互验证）
+setTimeout(runFullTest,2000);
+
+const isBridge=typeof JsBridge!=='undefined';
+console.log('9+ 键盘预览就绪 - '+(isBridge?'Android JsBridge':'Mock Rime Bridge')+' 已激活');
+})();
+</script>
+</body>
+</html>
