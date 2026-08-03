@@ -1028,6 +1028,7 @@ public class MainActivity extends Activity {
 
         long dbSize = dictDb.getDictDbSize();
         int phraseCount = dictDb.getPhraseCount();
+        int userPhraseCount = dictDb.getUserPhraseCount();
         int favCount = clipDb.getFavCount();
         int clipCount = clipDb.getClipCount();
 
@@ -1035,10 +1036,12 @@ public class MainActivity extends Activity {
         info.setText(
             "数据库文件: " + formatSize(dbSize) + "\n" +
             "  单字表 (chars): 17,047 条\n" +
-            "  词组表 (phrases): " + phraseCount + " 条\n" +
+            "  词组表 (phrases): " + phraseCount + " 条 (其中用户词 " + userPhraseCount + " 条)\n" +
+            "  热句表 (hot_sentences): 已学习\n" +
+            "  邻接词表 (ngram_adjacency): 已学习\n" +
             "  剪切记录 (clipboard): " + clipCount + " 条\n" +
             "  收藏记录 (favorites): " + favCount + " 条\n" +
-            "\n备份文件将保存到: Download/backup<时间戳>.db" +
+            "\n备份包含全部数据（含邻接词联想），保存到: Download/backup<时间戳>.db" +
             "\n还原时可从多个备份文件中选择" +
             "\n也可手动选择其他位置的.db文件");
         info.setTextSize(13);

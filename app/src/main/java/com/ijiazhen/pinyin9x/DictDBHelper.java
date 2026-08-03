@@ -46,6 +46,16 @@ public class DictDBHelper {
             "digit_seq TEXT NOT NULL, " +
             "freq INTEGER NOT NULL DEFAULT 1, " +
             "updated_at INTEGER NOT NULL)");
+        // 2026-08-02: N-Gram 邻接词表 — 记录词与词的上下文跟随关系
+        // 例如用户输入"你好"后接着输入"我们是"，记录 (你好, 我们是, freq)
+        db.execSQL("CREATE TABLE IF NOT EXISTS ngram_adjacency (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+            "context TEXT NOT NULL, " +      // 上文（已上屏的最后一个词）
+            "next_word TEXT NOT NULL, " +    // 跟随词
+            "freq INTEGER NOT NULL DEFAULT 1, " +
+            "updated_at INTEGER NOT NULL, " +
+            "UNIQUE(context, next_word))");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_ngram_context ON ngram_adjacency(context)");
         // 2026-07-31: 确保 phrases 表有 source 列，区分系统词与用户词（老库自动迁移）
         Cursor pc = db.rawQuery("PRAGMA table_info(phrases)", null);
         boolean hasSource = false;
@@ -193,6 +203,136 @@ public class DictDBHelper {
 
     public void hotUpsert(String digitSeq, String phrase) {
         upsertPhrase(digitSeq, phrase, 200, 500);
+    }
+
+    /**
+     * 2026-08-02: 查询短语是否存在（用于 FMM 分词）
+     * 返回 true 表示该短语在词典中存在
+     */
+    public boolean phraseExists(String phrase) {
+        Cursor c = db.rawQuery(
+            "SELECT 1 FROM phrases WHERE phrase=? LIMIT 1",
+            new String[]{phrase});
+        boolean exists = c.moveToFirst();
+        c.close();
+        return exists;
+    }
+
+    /**
+     * 2026-08-02: N-Gram 邻接学习 — 记录"上文→跟随词"共现关系
+     * 例如用户先输入"你好"，再输入"我们是"，记录 (你好 → 我们是, freq+1)
+     * @param context  上一个上屏的词/字
+     * @param nextWord 本次上屏的词/字
+     */
+    public void learnAdjacency(String context, String nextWord) {
+        if (context == null || context.isEmpty() || nextWord == null || nextWord.isEmpty()) return;
+        // 只学习中文上下文
+        if (!isAllChineseText(context)) return;
+
+        long now = System.currentTimeMillis() / 1000;
+        Cursor c = db.rawQuery(
+            "SELECT freq FROM ngram_adjacency WHERE context=? AND next_word=?",
+            new String[]{context, nextWord});
+        if (c.moveToFirst()) {
+            int oldFreq = c.getInt(0);
+            c.close();
+            db.execSQL("UPDATE ngram_adjacency SET freq=?, updated_at=? WHERE context=? AND next_word=?",
+                new Object[]{oldFreq + 1, now, context, nextWord});
+        } else {
+            c.close();
+            db.execSQL("INSERT INTO ngram_adjacency (context, next_word, freq, updated_at) VALUES (?, ?, ?, ?)",
+                new Object[]{context, nextWord, 1, now});
+        }
+    }
+
+    /**
+     * 2026-08-02: 查询邻接词 — 给定上文，返回最常跟随的词组列表
+     * 支持多级回溯：先精确匹配完整上文，没有则用末尾2字、末尾1字回退
+     * @param context  已上屏的文本（取末尾1-4字作为查询key）
+     * @param limit    返回条数
+     */
+    public List<PhraseEntry> queryAdjacency(String context, int limit) {
+        List<PhraseEntry> result = new ArrayList<>();
+        if (context == null || context.isEmpty()) return result;
+        if (!isAllChineseText(context)) return result;
+
+        // 多级回溯：4字 → 3字 → 2字 → 1字
+        for (int len = Math.min(4, context.length()); len >= 1; len--) {
+            String key = context.substring(context.length() - len);
+            Cursor c = db.rawQuery(
+                "SELECT next_word, freq FROM ngram_adjacency WHERE context=? ORDER BY freq DESC LIMIT ?",
+                new String[]{key, String.valueOf(limit)});
+            while (c.moveToNext()) {
+                PhraseEntry p = new PhraseEntry(c.getString(0), c.getInt(1));
+                result.add(p);
+            }
+            c.close();
+            if (!result.isEmpty()) break; // 命中就不再回退
+        }
+        return result;
+    }
+
+    /**
+     * 2026-08-02: 判断字符串是否全中文
+     */
+    private boolean isAllChineseText(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 0x4e00 || c > 0x9fff) return false;
+        }
+        return true;
+    }
+
+    /**
+     * 2026-08-02: 正向最大匹配（FMM）分词
+     * 利用已有 phrases 词典，将句子切分为有意义的词组
+     * 连续未匹配单字合并为"新词候选"（如"育婴师"→"育婴师"）
+     */
+    public List<String> segmentByFMM(String text) {
+        List<String> result = new ArrayList<>();
+        if (text == null || text.isEmpty()) return result;
+
+        int pos = 0;
+        int maxWordLen = 6;
+        StringBuilder unknownRun = new StringBuilder(); // 连续未匹配单字缓冲
+
+        while (pos < text.length()) {
+            int matchedLen = 0;
+            for (int len = Math.min(maxWordLen, text.length() - pos); len >= 2; len--) {
+                String sub = text.substring(pos, pos + len);
+                if (phraseExists(sub)) {
+                    matchedLen = len;
+                    // 先把之前积累的连续单字作为一个新词输出
+                    if (unknownRun.length() >= 2) {
+                        result.add(unknownRun.toString());
+                    } else if (unknownRun.length() == 1) {
+                        result.add(unknownRun.toString());
+                    }
+                    unknownRun.setLength(0);
+                    result.add(sub);
+                    break;
+                }
+            }
+            if (matchedLen == 0) {
+                char c = text.charAt(pos);
+                if (c >= '0' && c <= '9') {
+                    // 数字合并到连续单字缓冲（如"预留2周"中"2"归入未知段）
+                    unknownRun.append(c);
+                } else {
+                    unknownRun.append(c);
+                }
+                pos++;
+            } else {
+                pos += matchedLen;
+            }
+        }
+        // 收尾：把最后积累的连续单字作为一个新词输出
+        if (unknownRun.length() >= 2) {
+            result.add(unknownRun.toString());
+        } else if (unknownRun.length() == 1) {
+            result.add(unknownRun.toString());
+        }
+        return result;
     }
 
     /**
