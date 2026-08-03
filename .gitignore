@@ -11,3 +11,8 @@ keystore/keystore.properties
 /.kotlin
 *.log
 /.gradle
+
+*.aar
+*.onnx
+app/src/main/assets/sherpa-onnx-*
+app/src/main/jniLibs/*.so
