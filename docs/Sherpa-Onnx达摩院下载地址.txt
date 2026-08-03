@@ -1,0 +1,106 @@
+# 项目内Sherpa-Onnx相关资源完整下载地址整理
+根据你工程目录：`sherpa-onnx-1.12.11.aar`、中英双语流式Paraformer模型、Android jni so库，分**源码仓库、Android AAR、预编译so库、ASR模型、官方文档、镜像加速**6大类整理。
+
+## 一、Sherpa-Onnx 主源码仓库（基础入口）
+1. GitHub 主仓库
+```
+https://github.com/k2-fsa/sherpa-onnx
+```
+克隆命令：
+```bash
+git clone https://github.com/k2-fsa/sherpa-onnx.git
+```
+2. 官方文档首页
+```
+https://k2-fsa.github.io/sherpa/onnx/index.html
+```
+3. Android编译部署文档（适配你的app jniLibs）
+```
+https://k2-fsa.github.io/sherpa/onnx/android/build-sherpa-onnx.html
+```
+
+## 二、Android AAR包（工程app/libs/sherpa-onnx-1.12.11.aar）
+### 1. Releases总入口（所有版本AAR/预编译包）
+```
+https://github.com/k2-fsa/sherpa-onnx/releases
+```
+### 2. v1.12.11 Android完整预编译包（含aar + arm64-v8a/armeabi-v7a so）
+下载地址模板（替换版本号即可）：
+```
+https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.11/sherpa-onnx-v1.12.11-android.tar.bz2
+```
+解压后包含：
+- `sherpa-onnx-1.12.11.aar`（直接放入app/libs）
+- jniLibs全套so：`libonnxruntime.so`、`libsherpa-onnx-c-api.so`、`libsherpa-onnx-cxx-api.so`、`libsherpa-onnx-jni.so`
+
+### 3. HuggingFace国内镜像库（加速下载libs/so）
+```
+https://hf-mirror.com/csukuangfj/sherpa-onnx-libs/tree/main/jni
+```
+
+## 三、你项目使用的模型：sherpa-onnx-streaming-paraformer-bilingual-zh-en
+路径：`app/src/main/assets/sherpa-onnx-streaming-paraformer-bilingual-zh-en/`
+包含文件：`decoder.int8.onnx`、`encoder.int8.onnx`、`tokens.txt`
+
+### 1. 模型压缩包直链
+```
+https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-paraformer-bilingual-zh-en.tar.bz2
+```
+### 2. ASR所有模型总发布页
+```
+https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+```
+### 3. Paraformer流式模型官方说明页
+```
+https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-paraformer/paraformer-models.html
+```
+### 4. 魔搭ModelScope镜像（国内高速）
+```
+https://modelscope.cn/models/zhaochaoqun/sherpa-onnx-asr-models
+```
+
+## 四、jniLibs so库单独下载（arm64-v8a / armeabi-v7a）
+1. 完整Android预编译包（一键获取全部so）
+```
+https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.11/sherpa-onnx-v1.12.11-android.tar.bz2
+```
+2. 解压后目录对应工程：
+```
+解压包/android/jniLibs/arm64-v8a/ → app/src/main/jniLibs/arm64-v8a/
+解压包/android/jniLibs/armeabi-v7a/ → app/src/main/jniLibs/armeabi-v7a/
+```
+3. 国内加速镜像so库：
+```
+https://hf-mirror.com/csukuangfj/sherpa-onnx-libs/tree/main/android
+```
+
+## 五、官方Demo APK（测试语音识别效果）
+```
+https://huggingface.co/csukuangfj/sherpa-onnx-apk/tree/main/asr
+```
+
+## 六、国内加速镜像汇总（解决GitHub下载慢）
+1. HuggingFace镜像（模型/库文件）
+```
+https://hf-mirror.com/csukuangfj
+```
+2. ModelScope魔搭（ASR模型）
+```
+https://modelscope.cn/models/zhaochaoqun/sherpa-onnx-asr-models
+```
+
+## 七、配套依赖补充地址
+1. Silero VAD 语音端点检测模型（常用搭配）
+```
+https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+```
+2. TTS语音合成模型发布页
+```
+https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models
+```
+
+## 使用说明
+1. 更新版本：将链接中`v1.12.11`替换为最新Release版本；
+2. 模型解压后直接放入`assets`对应文件夹；
+3. Android tar包解压后提取aar放入`app/libs`，so文件覆盖`jniLibs`；
+4. 国内下载优先使用hf-mirror、modelscope镜像避免超时。
