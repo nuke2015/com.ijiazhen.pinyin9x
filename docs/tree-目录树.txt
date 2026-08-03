@@ -1,0 +1,127 @@
+卷 2t5 的文件夹 PATH 列表
+卷序列号为 00000097 000C:3928
+D:.
+│  .gitignore
+│  app_icon_9plus.png
+│  build.gradle
+│  debug.bat
+│  gradle.properties
+│  gradlew
+│  gradlew.bat
+│  install.bat
+│  local.properties
+│  README.md
+│  settings.gradle
+│  tree.txt
+│  x.bat
+│  
+├─app
+│  │  build.gradle
+│  │  local.properties
+│  │  proguard-rules.pro
+│  │  
+│  ├─libs
+│  │      sherpa-onnx-1.12.11.aar
+│  │      
+│  └─src
+│      └─main
+│          │  AndroidManifest.xml
+│          │  
+│          ├─assets
+│          │  │  pinyin_dict.db
+│          │  │  
+│          │  └─sherpa-onnx-streaming-paraformer-bilingual-zh-en
+│          │          decoder.int8.onnx
+│          │          encoder.int8.onnx
+│          │          tokens.txt
+│          │          
+│          ├─java
+│          │  └─com
+│          │      └─ijiazhen
+│          │          └─pinyin9x
+│          │                  ClipDBHelper.java
+│          │                  DictDBHelper.java
+│          │                  MainActivity.java
+│          │                  PinyinEngine.java
+│          │                  PinyinIME.java
+│          │                  SherpaOnnxVoiceRecognizer.kt
+│          │                  
+│          ├─jniLibs
+│          │  ├─arm64-v8a
+│          │  │      libonnxruntime.so
+│          │  │      libsherpa-onnx-c-api.so
+│          │  │      libsherpa-onnx-cxx-api.so
+│          │  │      libsherpa-onnx-jni.so
+│          │  │      README.md
+│          │  │      
+│          │  └─armeabi-v7a
+│          │          libonnxruntime.so
+│          │          libsherpa-onnx-c-api.so
+│          │          libsherpa-onnx-cxx-api.so
+│          │          libsherpa-onnx-jni.so
+│          │          README.md
+│          │          
+│          └─res
+│              ├─layout
+│              │      main.xml
+│              │      
+│              ├─mipmap-hdpi
+│              │      app_icon_9plus.png
+│              │      
+│              ├─mipmap-mdpi
+│              │      app_icon_9plus.png
+│              │      
+│              ├─mipmap-xhdpi
+│              │      app_icon_9plus.png
+│              │      
+│              ├─mipmap-xxhdpi
+│              │      app_icon_9plus.png
+│              │      
+│              ├─mipmap-xxxhdpi
+│              │      app_icon_9plus.png
+│              │      
+│              └─xml
+│                      method.xml
+│                      
+├─docs
+│  │  baseplan输入法.txt
+│  │  keyboard_mockup.html
+│  │  step.txt
+│  │  三步上栏.txt
+│  │  九宫拼音-三步上栏-交互稿.md
+│  │  单词存储算法.txt
+│  │  模糊音算法.txt
+│  │  零帧起手.txt
+│  │  
+│  ├─pinyin9x
+│  │  │  about pinyin9x-关于我们.html
+│  │  │  
+│  │  └─pinyin9x-docs
+│  │      └─_shared
+│  │          ├─fonts
+│  │          │      IBMPlexMono-Bold.ttf
+│  │          │      IBMPlexMono-Regular.ttf
+│  │          │      IBMPlexSerif-Bold.ttf
+│  │          │      IBMPlexSerif-Regular.ttf
+│  │          │      
+│  │          └─js
+│  │                  echarts.min.js
+│  │                  mermaid.min.js
+│  │                  
+│  ├─sqlite
+│  │      clean_user_data.py
+│  │      import_idioms.py
+│  │      
+│  └─ui
+│          Screenshot_2026-08-01-23-52-13-051_com.miui.notes.jpg
+│          Screenshot_2026-08-01-23-52-14-892_com.miui.notes.jpg
+│          Screenshot_2026-08-01-23-52-16-566_com.miui.notes.jpg
+│          Screenshot_2026-08-01-23-52-18-039_com.miui.notes.jpg
+│          Screenshot_2026-08-01-23-52-19-552_com.miui.notes.jpg
+│          Screenshot_2026-08-01-23-52-23-021_com.miui.notes.jpg
+│          
+└─gradle
+    └─wrapper
+            gradle-wrapper.jar
+            gradle-wrapper.properties
+            
