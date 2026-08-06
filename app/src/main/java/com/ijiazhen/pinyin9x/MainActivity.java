@@ -45,6 +45,11 @@ public class MainActivity extends Activity {
     private StringBuilder testOutputBuffer = new StringBuilder();
     private String mRestoreTargetPath; // 手动选择文件还原时的目标路径
 
+    // 2026-08-05 02:50: 邻接词管理分页
+    private static final int ADJ_PAGE = 50;
+    private static final int BATCH_MIN_LEN_DEFAULT = 6;
+    private int ngramPage = 0;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -84,7 +89,8 @@ public class MainActivity extends Activity {
             {"三步上栏手动测试", "手动测试三阶段组词流程"},
             {"十字光标连选自动测试", "测试Shift+方向键文本连选功能"},
             {"用户热词管理", "管理用户自定义词组"},
-            {"热句管理", "管理热句联想数据"},
+            // [移除热句功能-2026-08-05 05:27:52] 已删除「热句管理」菜单入口
+            {"邻接词管理", "管理 N-Gram 邻接词数据"},
             {"收藏记录管理", "管理收藏夹内容"},
             {"剪切记录管理", "管理剪贴板历史"},
             {"数据备份与恢复", "备份或还原数据库文件"},
@@ -108,7 +114,8 @@ public class MainActivity extends Activity {
             case 3: buildComposeTestScreen(); break;
             case 4: buildCursorSelectionTestScreen(); break;
             case 5: buildHotWordsScreen(); break;
-            case 6: buildHotSentencesScreen(); break;
+            // [移除热句功能-2026-08-05 05:27:52] case 6 热句管理已删除，后续编号顺移
+            case 6: buildAdjacencyScreen(); break;
             case 7: buildFavoritesScreen(); break;
             case 8: buildClipboardScreen(); break;
             case 9: buildBackupScreen(); break;
@@ -622,7 +629,17 @@ public class MainActivity extends Activity {
     }
 
     // ====== 6. 用户热词管理 ======
+    // 2026-08-05 02:20: 分页加载（每页100条），列表底部"加载更多"，修复超过100条看不到的问题
+    private int hotWordsOffset = 0;
+    private static final int HOT_WORDS_PAGE = 100;
+
     private void buildHotWordsScreen() {
+        container.removeAllViews();
+        hotWordsOffset = 0;
+        renderHotWordsScreen();
+    }
+
+    private void renderHotWordsScreen() {
         container.removeAllViews();
 
         LinearLayout root = new LinearLayout(this);
@@ -646,7 +663,7 @@ public class MainActivity extends Activity {
         list.setOrientation(LinearLayout.VERTICAL);
         list.setPadding(dp(8), dp(4), dp(8), dp(4));
 
-        List<DictDBHelper.PhraseEntry> phrases = db.getAllUserPhrases(0, 100);
+        List<DictDBHelper.PhraseEntry> phrases = db.getAllUserPhrases(hotWordsOffset, HOT_WORDS_PAGE);
         if (phrases.isEmpty()) {
             TextView empty = new TextView(this);
             empty.setText("暂无用户热词，使用输入法组词功能或输入句子后自动添加");
@@ -655,6 +672,7 @@ public class MainActivity extends Activity {
             empty.setPadding(dp(12), dp(20), dp(12), dp(20));
             list.addView(empty);
         } else {
+            SimpleDateFormat sdf = new SimpleDateFormat("MM-dd HH:mm", Locale.getDefault());
             for (DictDBHelper.PhraseEntry p : phrases) {
                 LinearLayout row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
@@ -672,7 +690,15 @@ public class MainActivity extends Activity {
                 phraseTv.setTextColor(COLOR_TEXT);
                 info.addView(phraseTv);
                 TextView detailTv = new TextView(this);
-                detailTv.setText("数字串: " + p.digitSeq + "  频率: " + p.frequency);
+                // 2026-08-05 02:20: 明细增加最近学习时间，直观对应新排序
+                String timeStr;
+                try {
+                    timeStr = sdf.format(new Date(p.updatedAt * 1000));
+                } catch (Exception e) {
+                    timeStr = "";
+                }
+                detailTv.setText("数字串: " + p.digitSeq + "  频率: " + p.frequency
+                    + (timeStr.isEmpty() ? "" : "  更新: " + timeStr));
                 detailTv.setTextSize(11);
                 detailTv.setTextColor(COLOR_TEXT_DIM);
                 info.addView(detailTv);
@@ -692,11 +718,30 @@ public class MainActivity extends Activity {
 
                 list.addView(row, rlp);
             }
+            // 2026-08-05 02:20: 未加载完时显示"加载更多"按钮，点击追加下一页
+            if (hotWordsOffset + phrases.size() < phraseCount) {
+                Button moreBtn = new Button(this);
+                moreBtn.setText("加载更多（还剩 " + (phraseCount - hotWordsOffset - phrases.size()) + " 条）");
+                moreBtn.setTextSize(13);
+                moreBtn.setOnClickListener(v -> {
+                    hotWordsOffset += HOT_WORDS_PAGE;
+                    renderHotWordsScreen();
+                });
+                list.addView(moreBtn);
+            }
         }
 
         sv.addView(list);
         root.addView(sv, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+        // [新增多种清理模式-2026-08-05 05:27:52] 热词管理页批量清理入口
+        Button hotBatchBtn = new Button(this);
+        hotBatchBtn.setText("批量清理（多种模式）");
+        hotBatchBtn.setTextSize(13);
+        hotBatchBtn.setTextColor(COLOR_RED);
+        hotBatchBtn.setOnClickListener(v -> showHotWordsCleanupDialog(db));
+        root.addView(hotBatchBtn);
 
         Button backBtn = new Button(this);
         backBtn.setText("返回首页");
@@ -706,91 +751,167 @@ public class MainActivity extends Activity {
         container.addView(root);
     }
 
-    // ====== 6.5 热句管理 ======
-    private void buildHotSentencesScreen() {
+    // [新增多种清理模式-2026-08-05 05:27:52] 热词批量清理：先选模式，再输入阈值，反馈删除条数
+    private void showHotWordsCleanupDialog(final DictDBHelper db) {
+        final String[] modes = {
+            "频率低的（默认 ≤2）",
+            "超过一个月未更新（30天）",
+            "超过一周未更新（7天）",
+            "字数太多的（默认 ≥5字）"
+        };
+        new AlertDialog.Builder(this)
+            .setTitle("选择清理模式")
+            .setItems(modes, (d, which) -> {
+                switch (which) {
+                    case 0: promptAndDeleteHotWords(db, "频率上限", 2, "maxFreq"); break;
+                    case 1: doDeleteHotWords(db, 30, "days"); break;
+                    case 2: doDeleteHotWords(db, 7, "days"); break;
+                    case 3: promptAndDeleteHotWords(db, "字数下限", 5, "minLen"); break;
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    // [新增多种清理模式-2026-08-05 05:27:52] 热词：输入阈值后执行删除
+    private void promptAndDeleteHotWords(final DictDBHelper db, String label, int defVal, final String mode) {
+        final EditText input = new EditText(this);
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        input.setText(String.valueOf(defVal));
+        input.setSelectAllOnFocus(true);
+        new AlertDialog.Builder(this)
+            .setTitle("批量清理用户热词")
+            .setMessage("请输入" + label + "：")
+            .setView(input)
+            .setPositiveButton("删除", (d, w) -> {
+                int val;
+                try { val = Integer.parseInt(input.getText().toString().trim()); }
+                catch (Exception e) { val = defVal; }
+                if (val < 1) val = 1;
+                doDeleteHotWords(db, val, mode);
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    // [新增多种清理模式-2026-08-05 05:27:52] 热词：执行删除并反馈条数（仅删用户词，不删系统词）
+    private void doDeleteHotWords(DictDBHelper db, int val, String mode) {
+        int n = 0;
+        String desc = "";
+        if ("maxFreq".equals(mode)) {
+            n = db.deleteUserPhraseByMaxFreq(val);
+            desc = "频率≤" + val;
+        } else if ("days".equals(mode)) {
+            n = db.deleteUserPhraseBeforeDays(val);
+            desc = "超过" + val + "天未更新";
+        } else if ("minLen".equals(mode)) {
+            n = db.deleteUserPhraseByMinLen(val);
+            desc = "字数≥" + val;
+        }
+        toast("已删除 " + n + " 条用户热词（" + desc + "）");
+        buildHotWordsScreen();
+    }
+
+    // [移除热句功能-2026-08-05 05:27:52] 已删除整个 buildHotSentencesScreen 方法
+
+    // ====== 7.5 邻接词管理 ======
+    private void buildAdjacencyScreen() {
+        container.removeAllViews();
+        ngramPage = 0;
+        renderAdjacencyScreen();
+    }
+
+    private void renderAdjacencyScreen() {
         container.removeAllViews();
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(COLOR_BG);
 
-        root.addView(makeHeader("热句管理", v -> buildHomeScreen()));
+        root.addView(makeHeader("邻接词管理", v -> buildHomeScreen()));
         root.addView(makeSpace(4));
 
         DictDBHelper db = DictDBHelper.getInstance(this);
-        // 查询热句表
-        final List<String[]> hotSentences = new ArrayList<>();
-        Cursor c = db.getDatabase().rawQuery(
-            "SELECT sentence, freq, updated_at FROM hot_sentences ORDER BY freq DESC LIMIT 100", null);
-        while (c.moveToNext()) {
-            hotSentences.add(new String[]{c.getString(0), String.valueOf(c.getInt(1)), c.getString(2)});
-        }
-        c.close();
+        int total = db.getAdjacencyCount();
+        int pageCount = total == 0 ? 0 : (total - 1) / ADJ_PAGE + 1;
+        if (pageCount > 0 && ngramPage > pageCount - 1) ngramPage = pageCount - 1;
+        if (ngramPage < 0) ngramPage = 0;
 
         TextView stats = new TextView(this);
-        stats.setText("共 " + hotSentences.size() + " 条热句");
+        int bigCount = db.getAdjacencyCountByMinLen(BATCH_MIN_LEN_DEFAULT);
+        stats.setText("共 " + total + " 条邻接词，其中跟随词≥" + BATCH_MIN_LEN_DEFAULT + "字 " + bigCount + " 条");
         stats.setTextSize(13);
         stats.setTextColor(COLOR_TEXT_DIM);
         stats.setPadding(dp(16), dp(4), dp(16), dp(8));
         root.addView(stats);
+
+        Button batchBtn = new Button(this);
+        // [新增多种清理模式-2026-08-05 05:27:52] 批量清理改为4种模式选择
+        batchBtn.setText("批量清理（多种模式）");
+        batchBtn.setTextSize(13);
+        batchBtn.setTextColor(COLOR_RED);
+        batchBtn.setOnClickListener(v -> showAdjacencyCleanupDialog(db));
+        root.addView(batchBtn);
 
         ScrollView sv = new ScrollView(this);
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         list.setPadding(dp(8), dp(4), dp(8), dp(4));
 
-        if (hotSentences.isEmpty()) {
+        List<DictDBHelper.AdjacencyEntry> entries = db.getAllAdjacency(ngramPage * ADJ_PAGE, ADJ_PAGE);
+        if (entries.isEmpty()) {
             TextView empty = new TextView(this);
-            empty.setText("暂无热句，打字时句末标点(。！？)上屏后会自动学习");
+            empty.setText("暂无邻接词数据");
             empty.setTextSize(14);
             empty.setTextColor(COLOR_TEXT_DIM);
             empty.setPadding(dp(12), dp(20), dp(12), dp(20));
             list.addView(empty);
         } else {
             SimpleDateFormat sdf = new SimpleDateFormat("MM-dd HH:mm", Locale.getDefault());
-            for (String[] row : hotSentences) {
-                LinearLayout itemRow = new LinearLayout(this);
-                itemRow.setOrientation(LinearLayout.HORIZONTAL);
-                itemRow.setBackgroundColor(COLOR_SURFACE);
-                itemRow.setPadding(dp(12), dp(8), dp(4), dp(8));
+            for (DictDBHelper.AdjacencyEntry e : entries) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setBackgroundColor(COLOR_SURFACE);
+                row.setPadding(dp(12), dp(8), dp(4), dp(8));
                 LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 rlp.setMargins(0, 0, 0, dp(2));
 
                 LinearLayout info = new LinearLayout(this);
                 info.setOrientation(LinearLayout.VERTICAL);
-                TextView sentenceTv = new TextView(this);
-                String display = row[0].length() > 40 ? row[0].substring(0, 40) + "..." : row[0];
-                sentenceTv.setText(display);
-                sentenceTv.setTextSize(14);
-                sentenceTv.setTextColor(COLOR_TEXT);
-                info.addView(sentenceTv);
+                TextView mainTv = new TextView(this);
+                String ctx = e.context;
+                if (ctx.length() > 12) ctx = ctx.substring(0, 12) + "…";
+                mainTv.setText(ctx + " → " + e.nextWord);
+                mainTv.setTextSize(15);
+                mainTv.setTextColor(COLOR_TEXT);
+                info.addView(mainTv);
                 TextView detailTv = new TextView(this);
                 String timeStr;
                 try {
-                    timeStr = sdf.format(new Date(Long.parseLong(row[2]) * 1000));
-                } catch (Exception e) {
-                    timeStr = "未知";
+                    timeStr = sdf.format(new Date(e.updatedAt * 1000));
+                } catch (Exception ex) {
+                    timeStr = "";
                 }
-                detailTv.setText("频率: " + row[1] + "  更新: " + timeStr);
+                detailTv.setText("跟随词 " + e.nextWord.length() + " 字  频率: " + e.freq
+                    + (timeStr.isEmpty() ? "" : "  更新: " + timeStr));
                 detailTv.setTextSize(11);
                 detailTv.setTextColor(COLOR_TEXT_DIM);
                 info.addView(detailTv);
-                itemRow.addView(info, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+                row.addView(info, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
                 Button delBtn = new Button(this);
                 delBtn.setText("删除");
                 delBtn.setTextSize(12);
                 delBtn.setTextColor(COLOR_RED);
-                final String sent = row[0];
+                final int eid = e.id;
                 delBtn.setOnClickListener(v -> {
-                    db.getDatabase().execSQL("DELETE FROM hot_sentences WHERE sentence=?",
-                        new Object[]{sent});
-                    buildHotSentencesScreen();
+                    db.deleteAdjacencyById(eid);
+                    renderAdjacencyScreen();
                 });
-                itemRow.addView(delBtn);
+                row.addView(delBtn);
 
-                list.addView(itemRow, rlp);
+                list.addView(row, rlp);
             }
         }
 
@@ -798,12 +919,97 @@ public class MainActivity extends Activity {
         root.addView(sv, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
+        // 翻页控件
+        LinearLayout pageRow = new LinearLayout(this);
+        pageRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button prevBtn = new Button(this);
+        prevBtn.setText("上一页");
+        prevBtn.setTextSize(13);
+        prevBtn.setEnabled(ngramPage > 0);
+        prevBtn.setOnClickListener(v -> { ngramPage--; renderAdjacencyScreen(); });
+        pageRow.addView(prevBtn, new LinearLayout.LayoutParams(0, dp(48), 1));
+        TextView pageTv = new TextView(this);
+        pageTv.setText((total == 0 ? 0 : ngramPage + 1) + " / " + pageCount);
+        pageTv.setTextSize(13);
+        pageTv.setTextColor(COLOR_TEXT);
+        pageTv.setGravity(Gravity.CENTER);
+        pageRow.addView(pageTv, new LinearLayout.LayoutParams(0, dp(48), 1));
+        Button nextBtn = new Button(this);
+        nextBtn.setText("下一页");
+        nextBtn.setTextSize(13);
+        nextBtn.setEnabled(total == 0 || ngramPage < pageCount - 1);
+        nextBtn.setOnClickListener(v -> { ngramPage++; renderAdjacencyScreen(); });
+        pageRow.addView(nextBtn, new LinearLayout.LayoutParams(0, dp(48), 1));
+        root.addView(pageRow);
+
         Button backBtn = new Button(this);
         backBtn.setText("返回首页");
         backBtn.setOnClickListener(v -> buildHomeScreen());
         root.addView(backBtn);
 
         container.addView(root);
+    }
+
+    // [新增多种清理模式-2026-08-05 05:27:52] 邻接词批量清理：先选模式，再输入阈值，反馈删除条数
+    private void showAdjacencyCleanupDialog(final DictDBHelper db) {
+        final String[] modes = {
+            "频率低的（默认 ≤2）",
+            "超过一个月未更新（30天）",
+            "超过一周未更新（7天）",
+            "字数太多的（默认 ≥6）"
+        };
+        new AlertDialog.Builder(this)
+            .setTitle("选择清理模式")
+            .setItems(modes, (d, which) -> {
+                switch (which) {
+                    case 0: promptAndDeleteAdjacency(db, "频率上限", 2, "maxFreq"); break;
+                    case 1: doDeleteAdjacency(db, 30, "days"); break;
+                    case 2: doDeleteAdjacency(db, 7, "days"); break;
+                    case 3: promptAndDeleteAdjacency(db, "字数下限", BATCH_MIN_LEN_DEFAULT, "minLen"); break;
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    // [新增多种清理模式-2026-08-05 05:27:52] 邻接词：输入阈值后执行删除
+    private void promptAndDeleteAdjacency(final DictDBHelper db, String label, int defVal, final String mode) {
+        final EditText input = new EditText(this);
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        input.setText(String.valueOf(defVal));
+        input.setSelectAllOnFocus(true);
+        new AlertDialog.Builder(this)
+            .setTitle("批量清理邻接词")
+            .setMessage("请输入" + label + "：")
+            .setView(input)
+            .setPositiveButton("删除", (d, w) -> {
+                int val;
+                try { val = Integer.parseInt(input.getText().toString().trim()); }
+                catch (Exception e) { val = defVal; }
+                if (val < 1) val = 1;
+                doDeleteAdjacency(db, val, mode);
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    // [新增多种清理模式-2026-08-05 05:27:52] 邻接词：执行删除并反馈条数
+    private void doDeleteAdjacency(DictDBHelper db, int val, String mode) {
+        int n = 0;
+        String desc = "";
+        if ("maxFreq".equals(mode)) {
+            n = db.deleteAdjacencyByMaxFreq(val);
+            desc = "频率≤" + val;
+        } else if ("days".equals(mode)) {
+            n = db.deleteAdjacencyBeforeDays(val);
+            desc = "超过" + val + "天未更新";
+        } else if ("minLen".equals(mode)) {
+            n = db.deleteAdjacencyByMinLen(val);
+            desc = "跟随词≥" + val + "字";
+        }
+        toast("已删除 " + n + " 条邻接词（" + desc + "）");
+        ngramPage = 0;
+        renderAdjacencyScreen();
     }
 
     // ====== 7. 收藏记录管理 ======
@@ -927,13 +1133,14 @@ public class MainActivity extends Activity {
             list.addView(empty);
         } else {
             for (ClipDBHelper.ClipEntry c : clips) {
-                LinearLayout row = new LinearLayout(this);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setBackgroundColor(COLOR_SURFACE);
-                row.setPadding(dp(12), dp(8), dp(4), dp(8));
-                LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                // 2026-08-05 03:00: 每条记录两行结构 — 文本全宽显示，操作按钮独立一行，不挤压文本
+                LinearLayout entry = new LinearLayout(this);
+                entry.setOrientation(LinearLayout.VERTICAL);
+                entry.setBackgroundColor(COLOR_SURFACE);
+                entry.setPadding(dp(12), dp(8), dp(4), dp(8));
+                LinearLayout.LayoutParams entryLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                rlp.setMargins(0, 0, 0, dp(2));
+                entryLp.setMargins(0, 0, 0, dp(2));
 
                 LinearLayout info = new LinearLayout(this);
                 info.setOrientation(LinearLayout.VERTICAL);
@@ -948,7 +1155,14 @@ public class MainActivity extends Activity {
                 timeTv.setTextSize(11);
                 timeTv.setTextColor(COLOR_TEXT_DIM);
                 info.addView(timeTv);
-                row.addView(info, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+                entry.addView(info);
+
+                // 2026-08-05 03:00: 按钮独立一行，等宽分布
+                LinearLayout btnRow = new LinearLayout(this);
+                btnRow.setOrientation(LinearLayout.HORIZONTAL);
+                btnRow.setPadding(0, dp(4), 0, 0);
+
+                // [移除热句功能-2026-08-05 05:27:52] 已删除「+热句」按钮，该行仅剩收藏、删除两个按钮
 
                 Button favBtn = new Button(this);
                 favBtn.setText("收藏");
@@ -960,7 +1174,9 @@ public class MainActivity extends Activity {
                     clipDb.addFavorite(ct);
                     toast("已收藏: " + (ct.length() > 10 ? ct.substring(0, 10) + "..." : ct));
                 });
-                row.addView(favBtn);
+                LinearLayout.LayoutParams favLp = new LinearLayout.LayoutParams(0, dp(44), 1);
+                favLp.setMargins(0, 0, dp(4), 0);
+                btnRow.addView(favBtn, favLp);
 
                 Button delBtn = new Button(this);
                 delBtn.setText("删除");
@@ -970,9 +1186,10 @@ public class MainActivity extends Activity {
                     clipDb.deleteClip(cid);
                     buildClipboardScreen();
                 });
-                row.addView(delBtn);
+                btnRow.addView(delBtn, new LinearLayout.LayoutParams(0, dp(44), 1));
 
-                list.addView(row, rlp);
+                entry.addView(btnRow);
+                list.addView(entry, entryLp);
             }
         }
 
@@ -1037,7 +1254,7 @@ public class MainActivity extends Activity {
             "数据库文件: " + formatSize(dbSize) + "\n" +
             "  单字表 (chars): 17,047 条\n" +
             "  词组表 (phrases): " + phraseCount + " 条 (其中用户词 " + userPhraseCount + " 条)\n" +
-            "  热句表 (hot_sentences): 已学习\n" +
+            // [移除热句功能-2026-08-05 05:27:52] 已删除「热句表 (hot_sentences)」信息行
             "  邻接词表 (ngram_adjacency): 已学习\n" +
             "  剪切记录 (clipboard): " + clipCount + " 条\n" +
             "  收藏记录 (favorites): " + favCount + " 条\n" +
@@ -1069,6 +1286,13 @@ public class MainActivity extends Activity {
         manualPickBtn.setText("手动选择db文件还原");
         manualPickBtn.setOnClickListener(v -> pickBackupFileManually(dictDb.getDbPath()));
         content.addView(manualPickBtn);
+        content.addView(makeSpace(8));
+
+        // [新增手动增量还原-2026-08-05 05:27:52] 增量还原按钮：合并备份数据，不覆盖本地库
+        Button incrementalBtn = new Button(this);
+        incrementalBtn.setText("手动增量还原（不覆盖本地库）");
+        incrementalBtn.setOnClickListener(v -> pickBackupFileForIncremental());
+        content.addView(incrementalBtn);
         content.addView(makeSpace(12));
 
         Button backBtn = new Button(this);
@@ -1085,6 +1309,8 @@ public class MainActivity extends Activity {
     private static final int REQ_STORAGE = 1001;
     private static final int REQ_VOICE = 1002;
     private static final int REQ_FILE_PICK = 1003;
+    // [新增手动增量还原-2026-08-05 05:27:52] 增量还原文件选择请求码
+    private static final int REQ_FILE_PICK_INCREMENTAL = 1004;
     private static final String BACKUP_PREFIX = "backup";
     private static final String BACKUP_SUFFIX = ".db";
 
@@ -1207,6 +1433,16 @@ public class MainActivity extends Activity {
         startActivityForResult(intent, REQ_FILE_PICK);
     }
 
+    // [新增手动增量还原-2026-08-05 05:27:52] 选择备份文件用于增量合并（不覆盖本地库）
+    private void pickBackupFileForIncremental() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        String[] mimeTypes = {"application/octet-stream", "application/x-sqlite3", "application/vnd.sqlite3"};
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+        startActivityForResult(intent, REQ_FILE_PICK_INCREMENTAL);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -1223,6 +1459,52 @@ public class MainActivity extends Activity {
                 doRestoreFromUri(uri, fileName, mRestoreTargetPath);
             }
         }
+        // [新增手动增量还原-2026-08-05 05:27:52] 增量还原：合并备份数据，不覆盖本地库
+        if (requestCode == REQ_FILE_PICK_INCREMENTAL && resultCode == RESULT_OK && data != null) {
+            Uri uri = data.getData();
+            if (uri != null) {
+                String fileName = getFileNameFromUri(uri);
+                try {
+                    getContentResolver().takePersistableUriPermission(uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (Exception ignored) {}
+                doIncrementalRestoreFromUri(uri, fileName);
+            }
+        }
+    }
+
+    // [新增手动增量还原-2026-08-05 05:27:52] 执行增量还原：把备份复制到临时文件，合并后删除
+    private void doIncrementalRestoreFromUri(Uri uri, String fileName) {
+        new AlertDialog.Builder(this)
+            .setTitle("确认增量还原")
+            .setMessage("将合并备份数据到本地库，不覆盖现有数据。\n备份文件: " + fileName)
+            .setPositiveButton("确认合并", (d, w) -> {
+                java.io.File tmpFile = null;
+                android.database.sqlite.SQLiteDatabase backupDb = null;
+                try {
+                    // 把选中的备份复制到临时文件（不碰本地库路径）
+                    tmpFile = java.io.File.createTempFile("incr_backup_", ".db", getCacheDir());
+                    InputStream in = getContentResolver().openInputStream(uri);
+                    copyFrom(in, tmpFile);
+                    in.close();
+
+                    backupDb = android.database.sqlite.SQLiteDatabase.openDatabase(
+                        tmpFile.getAbsolutePath(), null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY);
+                    DictDBHelper dictDb = DictDBHelper.getInstance(this);
+                    String report = dictDb.mergeFromBackup(backupDb);
+                    // 合并后重置剪切库实例，确保 ClipDBHelper 读取最新数据
+                    ClipDBHelper.resetInstance();
+                    ClipDBHelper.getInstance(this);
+                    toast(report);
+                } catch (Exception e) {
+                    toast("增量还原失败: " + e.getMessage());
+                } finally {
+                    if (backupDb != null) backupDb.close();
+                    if (tmpFile != null) tmpFile.delete();
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
     }
 
     private String getFileNameFromUri(Uri uri) {

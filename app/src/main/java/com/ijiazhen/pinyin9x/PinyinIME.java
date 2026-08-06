@@ -22,9 +22,6 @@ import android.widget.*;
 import android.graphics.drawable.GradientDrawable;
 import android.content.Intent;
 
-import android.app.AlertDialog;
-import android.content.DialogInterface;
-
 import java.util.*;
 
 /**
@@ -94,16 +91,13 @@ public class PinyinIME extends InputMethodService {
     public static final String ACTION_VOICE_PERMISSION_GRANTED = "com.ijiazhen.pinyin9x.VOICE_PERMISSION_GRANTED";
     private BroadcastReceiver voicePermReceiver;
 
-    // === 2026-08-02: 热句渐进式补全状态（标点保留在分段中） ===
-    private String hotSentenceFull = null;      // 当前正在构建的完整热句
-    private String[] hotSentenceSegments = null; // 热句按标点分段，标点附在下一段开头
-    private int hotSentenceIdx = 0;              // 当前已上屏到第几段
-    private String hotSentenceAccum = "";        // 累计已上屏文本（含标点），用于匹配
-    private String lastCommitted = "";            // 最近一次上屏的文本，用于热句链匹配
+    // [移除热句功能-2026-08-05 05:27:52] 已删除热句渐进式补全状态变量及 lastCommitted
 
     // === 2026-08-02: N-Gram 邻接联想状态 ===
     private String lastContext = "";              // 上一次上屏的中文文本（非标点），用于逐词邻接学习
     private String segmentFirstWord = "";         // 当前标点段内的第一个词，用于短语邻接学习
+    // [增强邻接学习-2026-08-05] 段首词之后的累计文本，用于学习 段首词→后续完整短语
+    private String segmentAfterFirst = "";
 
     // === 符号键盘状态 ===
     // 2026-07-27: 去除分类tab，保留分类标题直接滚动浏览全部符号
@@ -175,7 +169,7 @@ public class PinyinIME extends InputMethodService {
         super.onCreate();
         prefs = getSharedPreferences("pinyin_ime", Context.MODE_PRIVATE);
         PinyinEngine.init(this);
-        DictDBHelper.getInstance().seedHotSentences(); // 2026-08-01: 预置热句种子
+        // [移除热句功能-2026-08-05 05:27:52] 已删除 seedHotSentences 调用
         clipDb = ClipDBHelper.getInstance(this);
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (cm != null) {
@@ -267,6 +261,13 @@ public class PinyinIME extends InputMethodService {
         super.onWindowHidden();
         if (currentMode == MODE_PINYIN) {
             splitAndLearn();
+            // [增强邻接学习-2026-08-05] 收起键盘时兜底学习 段首词→后续短语（用户未输入标点的情况）
+            if (!segmentFirstWord.isEmpty()) {
+                learnAdjacencyFromScreen(getCurrentInputConnection(), segmentFirstWord);
+                segmentFirstWord = "";
+                segmentAfterFirst = "";
+                lastContext = "";
+            }
         }
     }
 
@@ -556,6 +557,8 @@ public class PinyinIME extends InputMethodService {
     }
 
     private void switchToKeyboard(int mode) {
+        // 2026-08-05 02:40: 切换键盘时取消候选栏确认状态
+        cancelCandidateConfirm();
         currentMode = mode;
         shiftOn = false;
         capsLock = false;
@@ -920,15 +923,15 @@ public class PinyinIME extends InputMethodService {
         addCursorKey(r2, ctx, "\u590d\u5236", 13, 1);
         kb.addView(r2);
 
-        // 2026-07-29: Row 3 [撤消] [↓] [删除] [剪切] - 撤消↔剪切交换
+        // 2026-08-05 02:20: Row 3 [PgUp] [↓] [PgDn] [剪切] - 撤消↔PgUp、删除↔PgDn 交换后
         LinearLayout r3 = new LinearLayout(ctx); r3.setOrientation(LinearLayout.HORIZONTAL);
-        addCursorKey(r3, ctx, "\u64a4\u6d88", 16, 1);
+        addCursorKey(r3, ctx, "PgUp", 7, 1);
         addCursorKey(r3, ctx, "\u2193", 4, 1);
-        addCursorKey(r3, ctx, "\u5220\u9664", 15, 1);
+        addCursorKey(r3, ctx, "PgDn", 8, 1);
         addCursorKey(r3, ctx, "\u526a\u5207", 12, 1);
         kb.addView(r3);
 
-        // 2026-07-29: Row 4 [收藏列表] [剪切列表] [粘贴] [空格]
+        // 2026-08-05 02:20: Row 4 [收藏列表] [剪切列表] [粘贴] [删除] - 空格移出，删除移入
         LinearLayout r4 = new LinearLayout(ctx); r4.setOrientation(LinearLayout.HORIZONTAL);
         KeyButton favListBtn = makeKey(ctx, "\u6536\u85cf\u5217\u8868", null, COLOR_KEY_BG);
         favListBtn.setOnClickListener(v -> switchToKeyboard(MODE_FAVORITES));
@@ -937,15 +940,15 @@ public class PinyinIME extends InputMethodService {
         clipListBtn.setOnClickListener(v -> switchToKeyboard(MODE_CLIPBOARD));
         r4.addView(clipListBtn, keyLp(1));
         addCursorKey(r4, ctx, "\u7c98\u8d34", 14, 1);
-        KeyButton spaceBtn4 = makeKey(ctx, "\u7a7a\u683c", null, COLOR_KEY_BG);
-        spaceBtn4.setOnClickListener(v -> onSpace());
-        r4.addView(spaceBtn4, keyLp(1));
+        addCursorKey(r4, ctx, "\u5220\u9664", 15, 1);
         kb.addView(r4);
 
-        // 2026-07-29: Row 5 [PgUp] [PgDn] [清空] [换行] - 清空↔空格交换
+        // 2026-08-05 02:20: Row 5 [撤消] [空格] [清空] [换行] - 撤消/空格移入，PgUp/PgDn 移出
         LinearLayout r5 = new LinearLayout(ctx); r5.setOrientation(LinearLayout.HORIZONTAL);
-        addCursorKey(r5, ctx, "PgUp", 7, 1);
-        addCursorKey(r5, ctx, "PgDn", 8, 1);
+        addCursorKey(r5, ctx, "\u64a4\u6d88", 16, 1);
+        KeyButton spaceBtn5 = makeKey(ctx, "\u7a7a\u683c", null, COLOR_KEY_BG);
+        spaceBtn5.setOnClickListener(v -> onSpace());
+        r5.addView(spaceBtn5, keyLp(1));
         KeyButton clearBtn5 = makeKey(ctx, "\u6e05\u7a7a", null, COLOR_KEY_BG);
         clearBtn5.setOnClickListener(v -> onClear());
         r5.addView(clearBtn5, keyLp(1));
@@ -1071,7 +1074,7 @@ public class PinyinIME extends InputMethodService {
     // ====== 键盘输入处理 ======
     private void onT9Digit(String digit) {
         if (isComposing) return;
-        clearHotSentenceState(); // 2026-08-01: 新输入时清除热句补全状态
+        // [移除热句功能-2026-08-05 05:27:52] 已删除 clearHotSentenceState 调用
         pinyinDigits.append(digit);
         candidates = PinyinEngine.getCandidates(pinyinDigits.toString());
         updateCandidates();
@@ -1430,7 +1433,7 @@ public class PinyinIME extends InputMethodService {
         if (ic != null) {
             ic.commitText(text, 1);
         }
-        lastCommitted = text; // 2026-08-01: 记录最近上屏文本，供热句链匹配
+        // [移除热句功能-2026-08-05 05:27:52] 已删除 lastCommitted 赋值（仅供热句匹配）
         // 2026-08-02: 统一热词学习逻辑 — 非标点文本追加到缓冲区，标点触发分词
         if (!isPunctuationOnly(text)) {
             // 拼音模式和数字模式都追加（数字如"2"也要进buffer，保证"预留2周"完整学习）
@@ -1445,9 +1448,35 @@ public class PinyinIME extends InputMethodService {
                 DictDBHelper db = DictDBHelper.getInstance();
                 if (db != null) db.learnAdjacency(lastContext, text);
             }
+            // [逐字拆分学习-2026-08-05] 多字词内部逐字建立邻接关系，碎片化到单字级
+            // 例如上屏"看了吗" → 学习 资料→看、看→了、了→吗
+            if (text.length() >= 2 && isAllChinese(text)) {
+                DictDBHelper db = DictDBHelper.getInstance();
+                if (db != null) {
+                    // 上一词的末字 → 本次首字
+                    if (!lastContext.isEmpty()) {
+                        String lastChar = lastContext.substring(lastContext.length() - 1);
+                        String firstChar = text.substring(0, 1);
+                        db.learnAdjacency(lastChar, firstChar);
+                    }
+                    // 本次内部逐字
+                    for (int i = 0; i < text.length() - 1; i++) {
+                        db.learnAdjacency(text.substring(i, i + 1), text.substring(i + 1, i + 2));
+                    }
+                }
+            }
             // 记录本段第一个词（用于标点触发时的短语学习）
             if (segmentFirstWord.isEmpty()) {
                 segmentFirstWord = text;
+                segmentAfterFirst = "";
+            } else if (!text.equals(segmentFirstWord)) {
+                // [增强邻接学习-2026-08-05] 累计段首词之后的文本，学习 段首词→后续完整短语
+                // 例如: 上屏"宝妈"后接着上屏"你预产期是什么时候" → 学习 宝妈→你预产期是什么时候
+                segmentAfterFirst += text;
+                if (segmentAfterFirst.length() >= 2) {
+                    DictDBHelper db = DictDBHelper.getInstance();
+                    if (db != null) db.learnAdjacency(segmentFirstWord, segmentAfterFirst);
+                }
             }
             // 更新上下文为本次文本（只保留末尾4字，防止过长）
             if (text.length() > 4) {
@@ -1465,12 +1494,10 @@ public class PinyinIME extends InputMethodService {
             }
             // 标点后重置：下一段重新记录第一个词
             segmentFirstWord = "";
+            segmentAfterFirst = "";
             lastContext = "";
         }
-        // 2026-08-01: 句末标点触发整句热句学习
-        if (isSentenceEnding(text)) {
-            learnSentenceAsHot();
-        }
+        // [移除热句功能-2026-08-05 05:27:52] 已删除热句自动学习注释
     }
 
     /**
@@ -1664,65 +1691,7 @@ public class PinyinIME extends InputMethodService {
         return true;
     }
 
-    // 2026-08-02: 判断是否中文+数字混合（如"预留2周"）
-    private boolean isChineseOrDigit(String s) {
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            boolean isChinese = (c >= 0x4e00 && c <= 0x9fff);
-            boolean isDigit = (c >= '0' && c <= '9');
-            if (!isChinese && !isDigit) return false;
-        }
-        return true;
-    }
-
-    // 2026-08-01: 判断是否为句末标点
-    private boolean isSentenceEnding(String text) {
-        if (text == null || text.length() != 1) return false;
-        char c = text.charAt(0);
-        return c == '。' || c == '！' || c == '？' || c == '.' || c == '!' || c == '?';
-    }
-
-    // 2026-08-02: 从句末标点前的文本中学习整句热句（修复空句bug）
-    private void learnSentenceAsHot() {
-        InputConnection ic = getCurrentInputConnection();
-        if (ic == null) return;
-        CharSequence before = ic.getTextBeforeCursor(200, 0);
-        if (before == null || before.length() < 4) return;
-        String text = before.toString();
-
-        // 2026-08-02: 修正 — 最后一个字符是刚提交的句末标点，跳过它往前找
-        int searchEnd = text.length() - 1;
-        if (searchEnd >= 0) {
-            char lastChar = text.charAt(searchEnd);
-            if (lastChar == '。' || lastChar == '！' || lastChar == '？' ||
-                lastChar == '.' || lastChar == '!' || lastChar == '?') {
-                searchEnd--; // 跳过刚提交的句末标点
-            }
-        }
-        if (searchEnd < 0) return;
-
-        // 从 searchEnd 往前找上一个句末标点，取中间部分作为完整句子
-        int lastEnd = -1;
-        for (int i = searchEnd; i >= 0; i--) {
-            char c = text.charAt(i);
-            if (c == '。' || c == '！' || c == '？' || c == '\n' ||
-                c == '.' || c == '!' || c == '?') {
-                lastEnd = i;
-                break;
-            }
-        }
-        String sentence;
-        if (lastEnd >= 0) {
-            sentence = text.substring(lastEnd + 1, searchEnd + 1).trim();
-        } else {
-            sentence = text.substring(0, searchEnd + 1).trim();
-        }
-        // 2026-08-02: 允许中文+数字混合（如"预留2周"），不再要求纯中文
-        if (sentence.length() >= 4 && isChineseOrDigit(sentence.replaceAll("[，。？！；：、…,!.?;:\\s]+", ""))) {
-            DictDBHelper db = DictDBHelper.getInstance();
-            if (db != null) db.learnHotSentence(sentence);
-        }
-    }
+    // 2026-08-05 02:20: 已移除 isChineseOrDigit / isSentenceEnding / learnSentenceAsHot — 热句不再从用户输入自动学习，改为从剪切记录手动转化
 
     // ====== 2026-08-01: 语音输入模块 (Sherpa-ONNX 流式引擎) ======
 
@@ -1825,8 +1794,7 @@ public class PinyinIME extends InputMethodService {
 
         if (voiceCommittedLen > 0) {
             splitAndLearn();
-            // 2026-08-01: 语音输入结束后学习整句热句
-            learnVoiceSentenceAsHot();
+            // 2026-08-05 02:20: 语音结束后不再自动学习热句，改为从剪切记录手动转化
         }
         voiceCommittedLen = 0;
     }
@@ -1842,35 +1810,7 @@ public class PinyinIME extends InputMethodService {
         voiceCommittedLen += text.length();
     }
 
-    // 2026-08-01: 语音输入结束后学习整句热句
-    private void learnVoiceSentenceAsHot() {
-        InputConnection ic = getCurrentInputConnection();
-        if (ic == null) return;
-        CharSequence before = ic.getTextBeforeCursor(500, 0);
-        if (before == null || before.length() < 4) return;
-        String text = before.toString();
-        // 取最后一段完整句子（从上一个句末标点后开始）
-        int lastEnd = -1;
-        for (int i = text.length() - 1; i >= 0; i--) {
-            char c = text.charAt(i);
-            if (c == '。' || c == '！' || c == '？' || c == '\n' ||
-                c == '.' || c == '!' || c == '?') {
-                lastEnd = i;
-                break;
-            }
-        }
-        String sentence;
-        if (lastEnd >= 0) {
-            sentence = text.substring(lastEnd + 1).trim();
-        } else {
-            sentence = text.trim();
-        }
-        if (sentence.length() >= 4) {
-            DictDBHelper db = DictDBHelper.getInstance();
-            if (db != null) db.learnHotSentence(sentence);
-        }
-    }
-
+    // 2026-08-05 02:20: 已移除 learnVoiceSentenceAsHot — 语音结束后不再自动学习热句，改为从剪切记录手动转化
     private void resetVoiceTimeout() {
         cancelVoiceTimeout();
         if (voiceHandler == null) return;
@@ -2379,56 +2319,7 @@ public class PinyinIME extends InputMethodService {
     }
 
     private void onCandidateSelected() {
-        // 2026-08-01: 热句渐进式补全 — 检查刚上屏文本是否匹配当前段
-        String committedText = lastCommitted;
-        if (hotSentenceSegments != null && hotSentenceIdx < hotSentenceSegments.length
-                && committedText != null) {
-            // 当前正在热句链中，检查是否匹配当前段
-            String expectedSegment = hotSentenceSegments[hotSentenceIdx];
-            if (committedText.equals(expectedSegment)) {
-                // 匹配成功，追加到累计文本
-                hotSentenceAccum += expectedSegment;
-                hotSentenceIdx++;
-                // 检查是否还有下一段
-                if (hotSentenceIdx < hotSentenceSegments.length) {
-                    String nextSegment = hotSentenceSegments[hotSentenceIdx];
-                    pinyinDigits.setLength(0);
-                    candidates.clear();
-                    candidatePage = 0;
-                    isComposing = false;
-                    composingDigitStr = null;
-                    composingPinyinOptions = null;
-                    composingPinyins = null;
-                    composingChars = null;
-                    composingIndex = 0;
-                    composingCharPage = 0;
-                    lastComposingIndex = 0;
-                    candidates.add(new PinyinEngine.Candidate(nextSegment, "", "hot", 1));
-                    updateCandidates();
-                    return;
-                }
-                // 热句完成，学习并清理
-                DictDBHelper db = DictDBHelper.getInstance();
-                if (db != null) db.learnHotSentence(hotSentenceFull);
-                clearHotSentenceState();
-                pinyinDigits.setLength(0);
-                candidates.clear();
-                candidatePage = 0;
-                isComposing = false;
-                composingDigitStr = null;
-                composingPinyinOptions = null;
-                composingPinyins = null;
-                composingChars = null;
-                composingIndex = 0;
-                composingCharPage = 0;
-                lastComposingIndex = 0;
-                updateCandidates();
-                return;
-            }
-        }
-
-        // 不是热句链中的选择，清除热句状态，检查是否触发新的热句
-        clearHotSentenceState();
+        // [移除热句功能-2026-08-05 05:27:52] 已删除热句渐进式补全匹配逻辑，仅保留候选清空 + 邻接联想
 
         pinyinDigits.setLength(0);
         candidates.clear();
@@ -2442,9 +2333,6 @@ public class PinyinIME extends InputMethodService {
         composingCharPage = 0;
         lastComposingIndex = 0;
 
-        // 2026-08-01: 检查是否触发新的热句联想
-        tryTriggerHotSentence();
-
         // 2026-08-02: 没有热句联想时，显示邻接高频词组联想
         if (candidates.isEmpty()) {
             tryShowAssociated();
@@ -2453,58 +2341,9 @@ public class PinyinIME extends InputMethodService {
         updateCandidates();
     }
 
-    /**
-     * 2026-08-01: 检查已上屏文本，触发热句渐进式补全
-     */
-    private void tryTriggerHotSentence() {
-        DictDBHelper db = DictDBHelper.getInstance();
-        if (db == null) return;
+    // [移除热句功能-2026-08-05 05:27:52] 已删除 tryTriggerHotSentence 方法
 
-        // 2026-08-01: 直接用 lastCommitted 匹配，不依赖 getTextBeforeCursor（部分编辑器不可靠）
-        if (lastCommitted == null || lastCommitted.length() < 2) return;
-        if (isPunctuationOnly(lastCommitted)) return;
-
-        String sentence = db.queryHotSentenceFull(lastCommitted);
-        if (sentence == null) return;
-
-        // 2026-08-02: 用 lookahead 按标点分词，标点保留在下一段开头
-        // "你好，我们是家家月嫂" → ["你好", "，我们是家家月嫂"]
-        String[] segments = sentence.split("(?=[，。？！；：、…,!.?;:])");
-        if (segments.length < 2) return;
-
-        // 找到 lastCommitted 匹配到第几段（去掉首尾标点后比较）
-        int matchedIdx = -1;
-        String cleanCommitted = lastCommitted.replaceAll("^[，。？！；：、…,!.?;:]+|[，。？！；：、…,!.?;:]+$", "");
-        for (int i = 0; i < segments.length; i++) {
-            String cleanSeg = segments[i].replaceAll("^[，。？！；：、…,!.?;:]+|[，。？！；：、…,!.?;:]+$", "");
-            if (cleanSeg.equals(cleanCommitted)) {
-                matchedIdx = i;
-                break;
-            }
-        }
-        if (matchedIdx < 0 || matchedIdx + 1 >= segments.length) return;
-
-        // 设置热句状态
-        hotSentenceFull = sentence;
-        hotSentenceSegments = segments;
-        hotSentenceIdx = matchedIdx + 1;
-        hotSentenceAccum = lastCommitted;
-
-        // 建议下一段
-        String nextSegment = segments[hotSentenceIdx];
-        candidates.clear();
-        candidates.add(new PinyinEngine.Candidate(nextSegment, "", "hot", 1));
-    }
-
-    /**
-     * 2026-08-01: 清除热句渐进式补全状态
-     */
-    private void clearHotSentenceState() {
-        hotSentenceFull = null;
-        hotSentenceSegments = null;
-        hotSentenceIdx = 0;
-        hotSentenceAccum = "";
-    }
+    // [移除热句功能-2026-08-05 05:27:52] 已删除 clearHotSentenceState 方法
 
     /**
      * 2026-08-02: N-Gram 邻接联想 — 读取上文，查询高频跟随词组，追加到候选栏
@@ -2796,6 +2635,7 @@ public class PinyinIME extends InputMethodService {
                 spacer1.setLayoutParams(new LinearLayout.LayoutParams(dp(16), ViewGroup.LayoutParams.MATCH_PARENT));
                 row.addView(spacer1);
 
+
                 TextView favBtn = makeActionBtn(this, "收藏", COLOR_ACCENT);
                 favBtn.setOnClickListener(v -> {
                     clipDb.addFavorite(item.text);
@@ -2810,16 +2650,11 @@ public class PinyinIME extends InputMethodService {
 
                 TextView delBtn = makeActionBtn(this, "删除", 0xFFE53E3E);
                 delBtn.setOnClickListener(v -> {
-                    AlertDialog dialog = new AlertDialog.Builder(PinyinIME.this)
-                        .setMessage("确认删除此剪切记录？")
-                        .setPositiveButton("删除", (d, w) -> {
-                            clipDb.deleteClip(item.id);
-                            refreshClipboardList();
-                        })
-                        .setNegativeButton("取消", null)
-                        .create();
-                    dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_PANEL);
-                    dialog.show();
+                    // 2026-08-05 02:40: 删除确认改用候选栏提示+确认，避免 IME 中 Dialog 无 token 闪退
+                    showCandidateConfirm("确认删除此剪切记录？", () -> {
+                        clipDb.deleteClip(item.id);
+                        refreshClipboardList();
+                    });
                 });
                 row.addView(delBtn);
 
@@ -2891,16 +2726,11 @@ public class PinyinIME extends InputMethodService {
 
                 TextView delBtn = makeActionBtn(this, "删除", 0xFFE53E3E);
                 delBtn.setOnClickListener(v -> {
-                    AlertDialog dialog = new AlertDialog.Builder(PinyinIME.this)
-                        .setMessage("确认删除此收藏？")
-                        .setPositiveButton("删除", (d, w) -> {
-                            clipDb.deleteFavorite(item.id);
-                            refreshFavoritesList();
-                        })
-                        .setNegativeButton("取消", null)
-                        .create();
-                    dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_PANEL);
-                    dialog.show();
+                    // 2026-08-05 02:40: 删除确认改用候选栏提示+确认，避免 IME 中 Dialog 无 token 闪退
+                    showCandidateConfirm("确认删除此收藏？", () -> {
+                        clipDb.deleteFavorite(item.id);
+                        refreshFavoritesList();
+                    });
                 });
                 row.addView(delBtn);
 
@@ -2926,6 +2756,58 @@ public class PinyinIME extends InputMethodService {
         btn.setPadding(dp(6), dp(10), dp(6), dp(10));
         btn.setGravity(Gravity.CENTER);
         return btn;
+    }
+
+    // ====== 2026-08-05 02:40: IME 内确认改用候选栏 ======
+    // InputMethodService 是 Service 上下文，Dialog.show() 无 Activity token 会抛 BadTokenException 闪退；
+    // 独立 WindowManager 面板又依赖窗口 token、遮挡键盘，改用候选栏提示+确认最可靠
+    private boolean confirmMode = false;
+    private Runnable pendingConfirm;
+
+    private void showCandidateConfirm(String message, Runnable onConfirm) {
+        cancelCandidateConfirm();
+        confirmMode = true;
+        pendingConfirm = onConfirm;
+        pinyinText.setText(message);
+        pinyinText.setTextColor(COLOR_TEXT);
+        candidateList.removeAllViews();
+
+        TextView okBtn = makeCandidateConfirmBtn("确认", 0xFFFF3B30);
+        okBtn.setOnClickListener(v -> {
+            Runnable action = pendingConfirm;
+            cancelCandidateConfirm();
+            if (action != null) action.run();
+        });
+        candidateList.addView(okBtn, candidateConfirmBtnLp());
+
+        TextView cancelBtn = makeCandidateConfirmBtn("取消", COLOR_TEXT_DIM);
+        cancelBtn.setOnClickListener(v -> cancelCandidateConfirm());
+        candidateList.addView(cancelBtn, candidateConfirmBtnLp());
+    }
+
+    private TextView makeCandidateConfirmBtn(String text, int color) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(14);
+        tv.setTextColor(color);
+        tv.setBackgroundColor(COLOR_CANDIDATE_BG);
+        tv.setPadding(dp(16), dp(6), dp(16), dp(6));
+        tv.setGravity(Gravity.CENTER);
+        return tv;
+    }
+
+    private LinearLayout.LayoutParams candidateConfirmBtnLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, dp(8), 0);
+        return lp;
+    }
+
+    private void cancelCandidateConfirm() {
+        if (!confirmMode && pendingConfirm == null) return;
+        confirmMode = false;
+        pendingConfirm = null;
+        updateCandidates();
     }
 
     // ====== 辅助方法 ======

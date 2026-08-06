@@ -98,6 +98,13 @@ public class PinyinEngine {
             results.add(new Candidate(p.text, digitStr, "known", p.frequency * 10));
         }
 
+        // [词组前缀匹配-2026-08-05] 输入部分数字串时，匹配 digit_seq 以该串开头的词组
+        // 例如输入"阿"(2)时匹配"阿姨"(294)，权重低于精确匹配，高于 DP 组合
+        List<DictDBHelper.PhraseEntry> prefixPhrases = dbHelper.queryPhrasesByDigitSeqPrefix(digitStr, 50);
+        for (DictDBHelper.PhraseEntry p : prefixPhrases) {
+            results.add(new Candidate(p.text, digitStr, "prefix", p.frequency * 5));
+        }
+
         // 2. DP 分段候选
         List<List<String>> segmentations = segment(digitStr);
         // 仅唯一分词路径时生成多音节组合，歧义路径交给三步上栏

@@ -39,13 +39,7 @@ public class DictDBHelper {
             "text TEXT NOT NULL, " +
             "timestamp INTEGER NOT NULL, " +
             "pinned INTEGER DEFAULT 0)");
-        // 2026-08-01: 热句联想表，按标点分段存储，支持渐进式补全
-        db.execSQL("CREATE TABLE IF NOT EXISTS hot_sentences (" +
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-            "sentence TEXT NOT NULL, " +
-            "digit_seq TEXT NOT NULL, " +
-            "freq INTEGER NOT NULL DEFAULT 1, " +
-            "updated_at INTEGER NOT NULL)");
+        // [移除热句功能-2026-08-05 05:27:52] 已删除 hot_sentences 建表语句（新库不再创建该表，老库数据保留）
         // 2026-08-02: N-Gram 邻接词表 — 记录词与词的上下文跟随关系
         // 例如用户输入"你好"后接着输入"我们是"，记录 (你好, 我们是, freq)
         db.execSQL("CREATE TABLE IF NOT EXISTS ngram_adjacency (" +
@@ -65,6 +59,18 @@ public class DictDBHelper {
         pc.close();
         if (!hasSource) {
             db.execSQL("ALTER TABLE phrases ADD COLUMN source TEXT NOT NULL DEFAULT 'system'");
+        }
+        // 2026-08-05 02:20: 确保 phrases 表有 updated_at 列，支撑热词"按最近最新"排序（老库自动迁移）
+        Cursor uc = db.rawQuery("PRAGMA table_info(phrases)", null);
+        boolean hasUpdatedAt = false;
+        while (uc.moveToNext()) {
+            if ("updated_at".equals(uc.getString(1))) { hasUpdatedAt = true; break; }
+        }
+        uc.close();
+        if (!hasUpdatedAt) {
+            db.execSQL("ALTER TABLE phrases ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+            // 老数据统一初始化为当前时间，避免排序退化为全 0
+            db.execSQL("UPDATE phrases SET updated_at=?", new Object[]{System.currentTimeMillis() / 1000});
         }
     }
 
@@ -139,6 +145,20 @@ public class DictDBHelper {
         return result;
     }
 
+    // [词组前缀匹配-2026-08-05] 按数字序列前缀查询词组，使输入部分数字时也能匹配到完整词组
+    // 例如输入"阿"(2)时匹配"阿姨"(294)、"阿鼻地狱"等
+    public List<PhraseEntry> queryPhrasesByDigitSeqPrefix(String digitSeqPrefix, int limit) {
+        List<PhraseEntry> result = new ArrayList<>();
+        Cursor c = db.rawQuery(
+            "SELECT phrase, freq FROM phrases WHERE digit_seq LIKE ? || '%' AND digit_seq != ? ORDER BY freq DESC LIMIT ?",
+            new String[]{digitSeqPrefix, digitSeqPrefix, String.valueOf(limit)});
+        while (c.moveToNext()) {
+            result.add(new PhraseEntry(c.getString(0), c.getInt(1)));
+        }
+        c.close();
+        return result;
+    }
+
     /**
      * 按多个数字序列查询词组
      */
@@ -182,18 +202,21 @@ public class DictDBHelper {
     }
 
     public void upsertPhrase(String digitSeq, String phrase, int delta, int initFreq) {
+        long now = System.currentTimeMillis() / 1000;
         Cursor c = db.rawQuery("SELECT freq FROM phrases WHERE digit_seq=? AND phrase=?",
             new String[]{digitSeq, phrase});
         if (c.moveToFirst()) {
             int oldFreq = c.getInt(0);
             c.close();
             // 2026-07-31: 用户学习入口（组词/句子拆分）命中的词也标记为用户词
-            db.execSQL("UPDATE phrases SET freq=?, source=? WHERE digit_seq=? AND phrase=?",
-                new Object[]{oldFreq + delta, "user", digitSeq, phrase});
+            // 2026-08-05 02:20: 命中时同步刷新 updated_at，支撑热词"按最近最新"排序
+            db.execSQL("UPDATE phrases SET freq=?, source=?, updated_at=? WHERE digit_seq=? AND phrase=?",
+                new Object[]{oldFreq + delta, "user", now, digitSeq, phrase});
         } else {
             c.close();
-            db.execSQL("INSERT INTO phrases (digit_seq, phrase, freq, source) VALUES (?, ?, ?, ?)",
-                new Object[]{digitSeq, phrase, initFreq, "user"});
+            // 2026-08-05 02:20: 新词记录创建时间 updated_at
+            db.execSQL("INSERT INTO phrases (digit_seq, phrase, freq, source, updated_at) VALUES (?, ?, ?, ?, ?)",
+                new Object[]{digitSeq, phrase, initFreq, "user", now});
         }
     }
 
@@ -259,11 +282,13 @@ public class DictDBHelper {
         // 多级回溯：4字 → 3字 → 2字 → 1字
         for (int len = Math.min(4, context.length()); len >= 1; len--) {
             String key = context.substring(context.length() - len);
+            // [排序调整-2026-08-05] 改为最近优先(updated_at DESC)，频次次之(freq DESC)
             Cursor c = db.rawQuery(
-                "SELECT next_word, freq FROM ngram_adjacency WHERE context=? ORDER BY freq DESC LIMIT ?",
+                "SELECT next_word, freq, updated_at FROM ngram_adjacency WHERE context=? ORDER BY updated_at DESC, freq DESC LIMIT ?",
                 new String[]{key, String.valueOf(limit)});
             while (c.moveToNext()) {
                 PhraseEntry p = new PhraseEntry(c.getString(0), c.getInt(1));
+                p.updatedAt = c.getLong(2);
                 result.add(p);
             }
             c.close();
@@ -371,14 +396,17 @@ public class DictDBHelper {
     }
 
     // 2026-07-31: 仅查询用户词（组词/句子拆分产生的词），系统预置词不在此列
+    // 2026-08-05 02:20: 排序改为按最近更新优先，rowid 作次级键保证老数据顺序稳定
     public List<PhraseEntry> getAllUserPhrases(int offset, int limit) {
         List<PhraseEntry> result = new ArrayList<>();
         Cursor c = db.rawQuery(
-            "SELECT phrase, digit_seq, freq FROM phrases WHERE source='user' ORDER BY freq DESC LIMIT ? OFFSET ?",
+            "SELECT phrase, digit_seq, freq, updated_at FROM phrases WHERE source='user' " +
+            "ORDER BY updated_at DESC, rowid DESC LIMIT ? OFFSET ?",
             new String[]{String.valueOf(limit), String.valueOf(offset)});
         while (c.moveToNext()) {
             PhraseEntry p = new PhraseEntry(c.getString(0), c.getInt(2));
             p.digitSeq = c.getString(1);
+            p.updatedAt = c.getLong(3);
             result.add(p);
         }
         c.close();
@@ -411,117 +439,123 @@ public class DictDBHelper {
         return db;
     }
 
-    // ====== 2026-08-01: 热句联想（方案A: 前缀热句补全） ======
+    // [移除热句功能-2026-08-05 05:27:52] 已删除 learnHotSentence / queryHotNextSegment / queryHotSentenceFull / seedHotSentences 共4个热句方法
+
+    // ====== 2026-08-05 02:50: N-Gram 邻接词管理 ======
 
     /**
-     * 学习热句：将完整句子存入 hot_sentences 表
-     * 句子按标点分段后，每段也作为独立条目学习
+     * 分页查询全部邻接词，按最近更新排序（updated_at 为主键，rowid 兜底保证顺序稳定）
      */
-    public void learnHotSentence(String sentence) {
-        if (sentence == null || sentence.length() < 4) return;
-        // 去除首尾空白
-        sentence = sentence.trim();
-        if (sentence.length() < 4) return;
-
-        // 2026-08-01: 去掉标点后计算数字序列，避免 toDigitSeq 遇到标点返回空串
-        String cleanText = sentence.replaceAll("[^\\u4e00-\\u9fff]", "");
-        if (cleanText.length() < 4) return;
-        String digitSeq = PinyinEngine.toDigitSeq(cleanText);
-        if (digitSeq.isEmpty()) return;
-
-        long now = System.currentTimeMillis() / 1000;
-
-        // 检查是否已存在
+    public List<AdjacencyEntry> getAllAdjacency(int offset, int limit) {
+        List<AdjacencyEntry> result = new ArrayList<>();
         Cursor c = db.rawQuery(
-            "SELECT id, freq FROM hot_sentences WHERE sentence=?",
-            new String[]{sentence});
-        if (c.moveToFirst()) {
-            int id = c.getInt(0);
-            int oldFreq = c.getInt(1);
-            c.close();
-            db.execSQL("UPDATE hot_sentences SET freq=?, updated_at=? WHERE id=?",
-                new Object[]{oldFreq + 1, now, id});
-        } else {
-            c.close();
-            db.execSQL("INSERT INTO hot_sentences (sentence, digit_seq, freq, updated_at) VALUES (?, ?, ?, ?)",
-                new Object[]{sentence, digitSeq, 1, now});
-        }
-    }
-
-    /**
-     * 按前缀查询热句：给定已上屏的文本，查找以此开头的热句，返回下一段
-     * 返回 null 表示没有匹配的热句
-     */
-    public String queryHotNextSegment(String prefixText) {
-        if (prefixText == null || prefixText.length() < 2) return null;
-        // 去掉末尾可能存在的标点，方便匹配
-        String cleanPrefix = prefixText.replaceAll("[，。？！；：、…,!.?;:]+$", "");
-        if (cleanPrefix.length() < 2) return null;
-
-        Cursor c = db.rawQuery(
-            "SELECT sentence FROM hot_sentences WHERE sentence LIKE ? || '%' ORDER BY freq DESC LIMIT 1",
-            new String[]{cleanPrefix});
-        String result = null;
-        if (c.moveToFirst()) {
-            String fullSentence = c.getString(0);
-            // 提取下一段：从 cleanPrefix 之后到下一个标点或句尾
-            if (fullSentence.length() > cleanPrefix.length()) {
-                String remaining = fullSentence.substring(cleanPrefix.length());
-                // 跳过开头的标点
-                remaining = remaining.replaceAll("^[，。？！；：、…,!.?;:]+", "");
-                if (!remaining.isEmpty()) {
-                    // 提取到下一个标点为止
-                    String[] parts = remaining.split("[，。？！；：、…,!.?;:]", 2);
-                    result = parts[0];
-                    if (result.isEmpty()) result = null;
-                }
-            }
+            "SELECT id, context, next_word, freq, updated_at FROM ngram_adjacency " +
+            "ORDER BY updated_at DESC, rowid DESC LIMIT ? OFFSET ?",
+            new String[]{String.valueOf(limit), String.valueOf(offset)});
+        while (c.moveToNext()) {
+            result.add(new AdjacencyEntry(c.getInt(0), c.getString(1), c.getString(2),
+                c.getInt(3), c.getLong(4)));
         }
         c.close();
         return result;
     }
 
-    /**
-     * 按前缀查询完整热句（用于渐进式补全）
-     * 返回以 prefixText 开头的完整热句，或 null
-     */
-    public String queryHotSentenceFull(String prefixText) {
-        if (prefixText == null || prefixText.length() < 2) return null;
-        String cleanPrefix = prefixText.replaceAll("[，。？！；：、…,!.?;:]+$", "");
-        if (cleanPrefix.length() < 2) return null;
-
-        Cursor c = db.rawQuery(
-            "SELECT sentence FROM hot_sentences WHERE sentence LIKE ? || '%' ORDER BY freq DESC LIMIT 1",
-            new String[]{cleanPrefix});
-        String result = null;
-        if (c.moveToFirst()) {
-            result = c.getString(0);
-        }
+    public int getAdjacencyCount() {
+        Cursor c = db.rawQuery("SELECT COUNT(*) FROM ngram_adjacency", null);
+        int count = 0;
+        if (c.moveToFirst()) count = c.getInt(0);
         c.close();
-        return result;
+        return count;
     }
 
     /**
-     * 预置热句种子数据（首次初始化时调用）
+     * 统计跟随词字数 >= minLen 的邻接词条数
      */
-    public void seedHotSentences() {
-        Cursor c = db.rawQuery("SELECT COUNT(*) FROM hot_sentences", null);
-        boolean hasData = false;
-        if (c.moveToFirst()) hasData = c.getInt(0) > 0;
+    public int getAdjacencyCountByMinLen(int minLen) {
+        Cursor c = db.rawQuery(
+            "SELECT COUNT(*) FROM ngram_adjacency WHERE length(next_word) >= ?",
+            new String[]{String.valueOf(minLen)});
+        int count = 0;
+        if (c.moveToFirst()) count = c.getInt(0);
         c.close();
-        if (hasData) return; // 已有数据，不重复播种
+        return count;
+    }
 
-        // 预置热句
-        String[] seeds = {
-            "你好，我们是家家月嫂，请问有什么可以帮您",
-            "好的，收到，马上处理",
-            "谢谢，辛苦啦",
-            "没问题，请放心",
-            "不好意思，打扰了",
-        };
-        for (String s : seeds) {
-            learnHotSentence(s);
-        }
+    /**
+     * 单条删除邻接词记录
+     */
+    public void deleteAdjacencyById(int id) {
+        db.execSQL("DELETE FROM ngram_adjacency WHERE id=?", new Object[]{id});
+    }
+
+    /**
+     * 批量删除跟随词字数 >= minLen 的邻接词，返回删除条数
+     */
+    public int deleteAdjacencyByMinLen(int minLen) {
+        int n = getAdjacencyCountByMinLen(minLen);
+        db.execSQL("DELETE FROM ngram_adjacency WHERE length(next_word) >= ?",
+            new Object[]{minLen});
+        return n;
+    }
+
+    // ====== [新增多种清理模式-2026-08-05 05:27:52] ======
+    // 意图：为邻接词/热词管理页提供多种批量清理方式，返回删除条数供 UI 反馈。
+
+    /** 邻接词：删除 freq <= maxFreq 的记录，返回删除条数 */
+    public int deleteAdjacencyByMaxFreq(int maxFreq) {
+        Cursor c = db.rawQuery("SELECT COUNT(*) FROM ngram_adjacency WHERE freq <= ?",
+            new String[]{String.valueOf(maxFreq)});
+        int n = 0;
+        if (c.moveToFirst()) n = c.getInt(0);
+        c.close();
+        db.execSQL("DELETE FROM ngram_adjacency WHERE freq <= ?", new Object[]{maxFreq});
+        return n;
+    }
+
+    /** 邻接词：删除 updated_at 早于 days 天前的记录，返回删除条数 */
+    public int deleteAdjacencyBeforeDays(int days) {
+        long cutoff = (System.currentTimeMillis() / 1000) - (long) days * 24 * 3600;
+        Cursor c = db.rawQuery("SELECT COUNT(*) FROM ngram_adjacency WHERE updated_at < ?",
+            new String[]{String.valueOf(cutoff)});
+        int n = 0;
+        if (c.moveToFirst()) n = c.getInt(0);
+        c.close();
+        db.execSQL("DELETE FROM ngram_adjacency WHERE updated_at < ?", new Object[]{cutoff});
+        return n;
+    }
+
+    /** 热词(用户词)：删除 freq <= maxFreq 的用户词，返回删除条数 */
+    public int deleteUserPhraseByMaxFreq(int maxFreq) {
+        Cursor c = db.rawQuery("SELECT COUNT(*) FROM phrases WHERE source='user' AND freq <= ?",
+            new String[]{String.valueOf(maxFreq)});
+        int n = 0;
+        if (c.moveToFirst()) n = c.getInt(0);
+        c.close();
+        db.execSQL("DELETE FROM phrases WHERE source='user' AND freq <= ?", new Object[]{maxFreq});
+        return n;
+    }
+
+    /** 热词(用户词)：删除 updated_at 早于 days 天前的用户词，返回删除条数 */
+    public int deleteUserPhraseBeforeDays(int days) {
+        long cutoff = (System.currentTimeMillis() / 1000) - (long) days * 24 * 3600;
+        Cursor c = db.rawQuery("SELECT COUNT(*) FROM phrases WHERE source='user' AND updated_at < ?",
+            new String[]{String.valueOf(cutoff)});
+        int n = 0;
+        if (c.moveToFirst()) n = c.getInt(0);
+        c.close();
+        db.execSQL("DELETE FROM phrases WHERE source='user' AND updated_at < ?", new Object[]{cutoff});
+        return n;
+    }
+
+    /** 热词(用户词)：删除 length(phrase) >= minLen 的用户词，返回删除条数 */
+    public int deleteUserPhraseByMinLen(int minLen) {
+        Cursor c = db.rawQuery("SELECT COUNT(*) FROM phrases WHERE source='user' AND length(phrase) >= ?",
+            new String[]{String.valueOf(minLen)});
+        int n = 0;
+        if (c.moveToFirst()) n = c.getInt(0);
+        c.close();
+        db.execSQL("DELETE FROM phrases WHERE source='user' AND length(phrase) >= ?", new Object[]{minLen});
+        return n;
     }
 
     private static String[] appendArg(String[] src, String append) {
@@ -529,6 +563,150 @@ public class DictDBHelper {
         System.arraycopy(src, 0, result, 0, src.length);
         result[src.length] = append;
         return result;
+    }
+
+    // ====== [新增手动增量还原-2026-08-05 05:27:52] ======
+    // 意图：从用户选择的备份库中合并用户数据到本地库，不覆盖本地数据库文件。
+    // 合并策略：phrases(用户词) 频率取较大、updated_at 取较新；
+    //           ngram_adjacency(邻接词) 频率相加、updated_at 取较新；
+    //           clipboard/favorites 按 text 去重，本地没有的才插入。
+    // 全程在一个事务内完成，返回各表合并条数的报告字符串。
+    public String mergeFromBackup(SQLiteDatabase backupDb) {
+        int mergedPhrases = 0, mergedAdj = 0, mergedClip = 0, mergedFav = 0;
+
+        db.beginTransaction();
+        try {
+            // 1. phrases(用户词) — 仅合并备份中 source='user' 的词
+            if (tableHasColumn(backupDb, "phrases", "source")) {
+                Cursor bc = backupDb.rawQuery(
+                    "SELECT digit_seq, phrase, freq, updated_at FROM phrases WHERE source='user'", null);
+                long now = System.currentTimeMillis() / 1000;
+                while (bc.moveToNext()) {
+                    String digitSeq = bc.getString(0);
+                    String phrase = bc.getString(1);
+                    int bFreq = bc.getInt(2);
+                    long bUpdatedAt = bc.isNull(3) ? now : bc.getLong(3);
+
+                    Cursor lc = db.rawQuery(
+                        "SELECT freq, updated_at FROM phrases WHERE digit_seq=? AND phrase=?",
+                        new String[]{digitSeq, phrase});
+                    if (lc.moveToFirst()) {
+                        int lFreq = lc.getInt(0);
+                        long lUpdatedAt = lc.isNull(1) ? now : lc.getLong(1);
+                        lc.close();
+                        int maxFreq = Math.max(lFreq, bFreq);
+                        long maxUpdatedAt = Math.max(lUpdatedAt, bUpdatedAt);
+                        db.execSQL("UPDATE phrases SET freq=?, updated_at=? WHERE digit_seq=? AND phrase=?",
+                            new Object[]{maxFreq, maxUpdatedAt, digitSeq, phrase});
+                    } else {
+                        lc.close();
+                        db.execSQL("INSERT INTO phrases (digit_seq, phrase, freq, source, updated_at) VALUES (?, ?, ?, 'user', ?)",
+                            new Object[]{digitSeq, phrase, bFreq, bUpdatedAt});
+                    }
+                    mergedPhrases++;
+                }
+                bc.close();
+            }
+
+            // 2. ngram_adjacency(邻接词) — 频率相加、updated_at 取较新
+            if (tableExists(backupDb, "ngram_adjacency")) {
+                Cursor bc = backupDb.rawQuery(
+                    "SELECT context, next_word, freq, updated_at FROM ngram_adjacency", null);
+                long now = System.currentTimeMillis() / 1000;
+                while (bc.moveToNext()) {
+                    String context = bc.getString(0);
+                    String nextWord = bc.getString(1);
+                    int bFreq = bc.getInt(2);
+                    long bUpdatedAt = bc.isNull(3) ? now : bc.getLong(3);
+
+                    Cursor lc = db.rawQuery(
+                        "SELECT freq, updated_at FROM ngram_adjacency WHERE context=? AND next_word=?",
+                        new String[]{context, nextWord});
+                    if (lc.moveToFirst()) {
+                        int lFreq = lc.getInt(0);
+                        long lUpdatedAt = lc.isNull(1) ? now : lc.getLong(1);
+                        lc.close();
+                        int sumFreq = lFreq + bFreq;
+                        long maxUpdatedAt = Math.max(lUpdatedAt, bUpdatedAt);
+                        db.execSQL("UPDATE ngram_adjacency SET freq=?, updated_at=? WHERE context=? AND next_word=?",
+                            new Object[]{sumFreq, maxUpdatedAt, context, nextWord});
+                    } else {
+                        lc.close();
+                        db.execSQL("INSERT INTO ngram_adjacency (context, next_word, freq, updated_at) VALUES (?, ?, ?, ?)",
+                            new Object[]{context, nextWord, bFreq, bUpdatedAt});
+                    }
+                    mergedAdj++;
+                }
+                bc.close();
+            }
+
+            // 3. clipboard(剪切记录) — 按 text 去重，本地没有的插入
+            if (tableExists(backupDb, "clipboard")) {
+                Cursor bc = backupDb.rawQuery("SELECT text, timestamp FROM clipboard", null);
+                while (bc.moveToNext()) {
+                    String text = bc.getString(0);
+                    long ts = bc.getLong(1);
+                    Cursor lc = db.rawQuery("SELECT 1 FROM clipboard WHERE text=?", new String[]{text});
+                    if (!lc.moveToFirst()) {
+                        lc.close();
+                        db.execSQL("INSERT INTO clipboard (text, timestamp) VALUES (?, ?)",
+                            new Object[]{text, ts});
+                        mergedClip++;
+                    } else {
+                        lc.close();
+                    }
+                }
+                bc.close();
+            }
+
+            // 4. favorites(收藏) — 按 text 去重，本地没有的插入
+            if (tableExists(backupDb, "favorites")) {
+                Cursor bc = backupDb.rawQuery("SELECT text, timestamp FROM favorites", null);
+                while (bc.moveToNext()) {
+                    String text = bc.getString(0);
+                    long ts = bc.getLong(1);
+                    Cursor lc = db.rawQuery("SELECT 1 FROM favorites WHERE text=?", new String[]{text});
+                    if (!lc.moveToFirst()) {
+                        lc.close();
+                        db.execSQL("INSERT INTO favorites (text, timestamp, pinned) VALUES (?, ?, 0)",
+                            new Object[]{text, ts});
+                        mergedFav++;
+                    } else {
+                        lc.close();
+                    }
+                }
+                bc.close();
+            }
+
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+
+        return "增量还原完成:\n用户词 +" + mergedPhrases +
+            "\n邻接词 +" + mergedAdj +
+            "\n剪切记录 +" + mergedClip +
+            "\n收藏 +" + mergedFav;
+    }
+
+    // [新增手动增量还原-2026-08-05 05:27:52] 判断备份库中某表是否存在
+    private boolean tableExists(SQLiteDatabase backupDb, String tableName) {
+        Cursor c = backupDb.rawQuery(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", new String[]{tableName});
+        boolean exists = c.moveToFirst();
+        c.close();
+        return exists;
+    }
+
+    // [新增手动增量还原-2026-08-05 05:27:52] 判断备份库某表是否有指定列（兼容老库）
+    private boolean tableHasColumn(SQLiteDatabase backupDb, String tableName, String columnName) {
+        Cursor c = backupDb.rawQuery("PRAGMA table_info(" + tableName + ")", null);
+        boolean has = false;
+        while (c.moveToNext()) {
+            if (columnName.equals(c.getString(1))) { has = true; break; }
+        }
+        c.close();
+        return has;
     }
 
     public static class CharEntry {
@@ -542,6 +720,25 @@ public class DictDBHelper {
         public String text;
         public String digitSeq;
         public int frequency;
+        public long updatedAt; // 2026-08-05: 最近学习时间，支撑热词排序
         PhraseEntry(String t, int f) { text = t; frequency = f; }
+    }
+
+    /**
+     * 2026-08-05 02:50: N-Gram 邻接词记录
+     */
+    public static class AdjacencyEntry {
+        public int id;
+        public String context;
+        public String nextWord;
+        public int freq;
+        public long updatedAt;
+        AdjacencyEntry(int id, String context, String nextWord, int freq, long updatedAt) {
+            this.id = id;
+            this.context = context;
+            this.nextWord = nextWord;
+            this.freq = freq;
+            this.updatedAt = updatedAt;
+        }
     }
 }
